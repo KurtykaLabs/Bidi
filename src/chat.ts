@@ -4,6 +4,7 @@ export class Chat {
   private supabase: SupabaseClient;
   private channel: RealtimeChannel;
   private sentMessages = new Set<string>();
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(supabaseUrl: string, supabaseKey: string) {
     this.supabase = createClient(supabaseUrl, supabaseKey);
@@ -35,7 +36,9 @@ export class Chat {
   }
 
   private reconnect(onMessage: (text: string, sender: string) => void): void {
-    setTimeout(() => {
+    if (this.reconnectTimer) return;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
       console.log("Attempting to reconnect...");
       this.channel.unsubscribe();
       this.channel = this.supabase.channel("chat");
@@ -68,6 +71,10 @@ export class Chat {
   }
 
   unsubscribe(): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     this.channel.unsubscribe();
   }
 }
