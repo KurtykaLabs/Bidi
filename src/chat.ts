@@ -24,7 +24,21 @@ export class Chat {
           onMessage(text, sender);
         }
       )
-      .subscribe();
+      .subscribe((status, err) => {
+        if (status === "TIMED_OUT" || status === "CHANNEL_ERROR" || status === "CLOSED") {
+          console.error(`Realtime channel ${status}`, err);
+          this.reconnect(onMessage);
+        }
+      });
+  }
+
+  private reconnect(onMessage: (text: string, sender: string) => void): void {
+    setTimeout(() => {
+      console.log("Attempting to reconnect...");
+      this.channel.unsubscribe();
+      this.channel = this.supabase.channel("chat");
+      this.subscribe(onMessage);
+    }, 3000);
   }
 
   broadcastTyping(text: string, sender: string): void {
