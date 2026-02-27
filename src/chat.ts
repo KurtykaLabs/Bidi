@@ -5,6 +5,10 @@ export class Chat {
   private channel: RealtimeChannel;
   private sentMessages = new Set<string>();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private disposed = false;
+  private reconnectAttempts = 0;
+  private static readonly MAX_RECONNECT_DELAY = 60_000;
+  private static readonly BASE_RECONNECT_DELAY = 3_000;
 
   constructor(supabaseUrl: string, supabaseKey: string) {
     this.supabase = createClient(supabaseUrl, supabaseKey);
@@ -12,6 +16,7 @@ export class Chat {
   }
 
   subscribe(onMessage: (text: string, sender: string) => void): void {
+    this.disposed = false;
     this.channel
       .on(
         "postgres_changes",
@@ -27,23 +32,29 @@ export class Chat {
       )
       .subscribe((status, err) => {
         if (status === "SUBSCRIBED") {
+          this.reconnectAttempts = 0;
           console.log("Realtime channel connected");
         } else if (status === "TIMED_OUT" || status === "CHANNEL_ERROR" || status === "CLOSED") {
           console.error(`Realtime channel ${status}`, err);
-          this.reconnect(onMessage);
+          if (!this.disposed) this.reconnect(onMessage);
         }
       });
   }
 
   private reconnect(onMessage: (text: string, sender: string) => void): void {
     if (this.reconnectTimer) return;
+    const delay = Math.min(
+      Chat.BASE_RECONNECT_DELAY * 2 ** this.reconnectAttempts,
+      Chat.MAX_RECONNECT_DELAY
+    );
+    this.reconnectAttempts++;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      console.log("Attempting to reconnect...");
+      console.log(`Attempting to reconnect (attempt ${this.reconnectAttempts})...`);
       this.channel.unsubscribe();
       this.channel = this.supabase.channel("chat");
       this.subscribe(onMessage);
-    }, 3000);
+    }, delay);
   }
 
   broadcastTyping(text: string, sender: string): void {
@@ -71,6 +82,7 @@ export class Chat {
   }
 
   unsubscribe(): void {
+    this.disposed = true;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;

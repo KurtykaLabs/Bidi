@@ -191,6 +191,84 @@ describe("Chat", () => {
       expect(mockOn).toHaveBeenCalledTimes(2);
       expect(mockOn.mock.calls[1][2]).toBeDefined();
     });
+
+    it("uses exponential backoff on repeated failures", () => {
+      // Prevent auto-SUBSCRIBED on reconnect so the counter doesn't reset
+      mockSubscribe.mockImplementation((cb?: any) => {
+        subscribeCallback = cb;
+        return mockChannel;
+      });
+
+      chat.subscribe(vi.fn());
+      // Manually fire initial SUBSCRIBED
+      subscribeCallback!("SUBSCRIBED");
+
+      // First failure: 3s delay
+      subscribeCallback!("CHANNEL_ERROR");
+      vi.advanceTimersByTime(3000);
+      expect(mockChannelFactory).toHaveBeenCalledTimes(2);
+
+      // Second failure: 6s delay (no SUBSCRIBED fired, simulating persistent failure)
+      subscribeCallback!("CHANNEL_ERROR");
+      vi.advanceTimersByTime(5999);
+      expect(mockChannelFactory).toHaveBeenCalledTimes(2);
+      vi.advanceTimersByTime(1);
+      expect(mockChannelFactory).toHaveBeenCalledTimes(3);
+
+      // Third failure: 12s delay
+      subscribeCallback!("CHANNEL_ERROR");
+      vi.advanceTimersByTime(11999);
+      expect(mockChannelFactory).toHaveBeenCalledTimes(3);
+      vi.advanceTimersByTime(1);
+      expect(mockChannelFactory).toHaveBeenCalledTimes(4);
+    });
+
+    it("caps backoff delay at 60 seconds", () => {
+      mockSubscribe.mockImplementation((cb?: any) => {
+        subscribeCallback = cb;
+        return mockChannel;
+      });
+
+      chat.subscribe(vi.fn());
+      subscribeCallback!("SUBSCRIBED");
+
+      // Simulate many failures to exceed the cap (3s, 6s, 12s, 24s, 48s, then 60s cap)
+      for (let i = 0; i < 10; i++) {
+        subscribeCallback!("CHANNEL_ERROR");
+        vi.advanceTimersByTime(60_000);
+      }
+
+      // Next failure should still be capped at 60s
+      subscribeCallback!("CHANNEL_ERROR");
+      vi.advanceTimersByTime(59_999);
+      const countBefore = mockChannelFactory.mock.calls.length;
+      vi.advanceTimersByTime(1);
+      expect(mockChannelFactory).toHaveBeenCalledTimes(countBefore + 1);
+    });
+
+    it("resets backoff after successful reconnect", () => {
+      // Don't auto-fire SUBSCRIBED so we control the flow
+      mockSubscribe.mockImplementation((cb?: any) => {
+        subscribeCallback = cb;
+        return mockChannel;
+      });
+
+      chat.subscribe(vi.fn());
+      subscribeCallback!("SUBSCRIBED");
+
+      // First failure: 3s
+      subscribeCallback!("CHANNEL_ERROR");
+      vi.advanceTimersByTime(3000);
+      expect(mockChannelFactory).toHaveBeenCalledTimes(2);
+
+      // Reconnect succeeds
+      subscribeCallback!("SUBSCRIBED");
+
+      // Another failure should be back to 3s (not 6s)
+      subscribeCallback!("CHANNEL_ERROR");
+      vi.advanceTimersByTime(3000);
+      expect(mockChannelFactory).toHaveBeenCalledTimes(3);
+    });
   });
 
   describe("unsubscribe", () => {
@@ -205,6 +283,20 @@ describe("Chat", () => {
       subscribeCallback!("CHANNEL_ERROR");
 
       chat.unsubscribe();
+
+      vi.advanceTimersByTime(5000);
+
+      expect(mockChannelFactory).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not reconnect when CLOSED fires as side-effect of unsubscribe", () => {
+      vi.useFakeTimers();
+      chat.subscribe(vi.fn());
+
+      chat.unsubscribe();
+
+      // Simulate Supabase firing CLOSED as a side-effect of channel.unsubscribe()
+      subscribeCallback!("CLOSED");
 
       vi.advanceTimersByTime(5000);
 
