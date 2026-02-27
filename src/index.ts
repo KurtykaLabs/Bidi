@@ -6,12 +6,26 @@ const supabase = createClient(
   process.env.SUPABASE_ANON_KEY!
 );
 
-const channel = supabase.channel("chat");
+const sentMessages = new Set<string>();
 let currentLine = "";
 
+const channel = supabase
+  .channel("chat")
+  .on(
+    "postgres_changes",
+    { event: "INSERT", schema: "public", table: "messages" },
+    (payload) => {
+      const text = payload.new.text as string;
+      if (sentMessages.delete(text)) return;
+      process.stdout.write(`\r\x1b[K[received] ${text}\n> ${currentLine}`);
+    }
+  );
+
 async function sendMessage(text: string) {
+  sentMessages.add(text);
   const { error } = await supabase.from("messages").insert({ text });
   if (error) {
+    sentMessages.delete(text);
     process.stdout.write(`\n[error] ${error.message}\n> `);
     return;
   }
