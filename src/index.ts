@@ -1,15 +1,15 @@
-require("dotenv").config();
-const { createClient } = require("@supabase/supabase-js");
+import "dotenv/config";
+import { createClient } from "@supabase/supabase-js";
 
 const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_ANON_KEY!
 );
 
 const channel = supabase.channel("chat");
 let currentLine = "";
 
-async function sendMessage(text) {
+async function sendMessage(text: string) {
   const { error } = await supabase.from("messages").insert({ text });
   if (error) {
     process.stdout.write(`\n[error] ${error.message}\n> `);
@@ -41,7 +41,7 @@ process.stdin.setRawMode(true);
 process.stdin.resume();
 process.stdin.setEncoding("utf8");
 
-process.stdin.on("data", async (key) => {
+process.stdin.on("data", async (key: string) => {
   // Ctrl+C
   if (key === "\u0003") {
     console.log("\nBye!");
