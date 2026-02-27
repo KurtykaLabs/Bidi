@@ -25,7 +25,9 @@ export class Chat {
         }
       )
       .subscribe((status, err) => {
-        if (status === "TIMED_OUT" || status === "CHANNEL_ERROR" || status === "CLOSED") {
+        if (status === "SUBSCRIBED") {
+          console.log("Realtime channel connected");
+        } else if (status === "TIMED_OUT" || status === "CHANNEL_ERROR" || status === "CLOSED") {
           console.error(`Realtime channel ${status}`, err);
           this.reconnect(onMessage);
         }
