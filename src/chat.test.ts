@@ -1,8 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+let subscribeCallback: ((status: string, err?: Error) => void) | undefined;
 
 const mockSend = vi.fn();
 const mockUnsubscribe = vi.fn();
-const mockSubscribe = vi.fn((cb?: (status: string) => void) => {
+const mockSubscribe = vi.fn((cb?: (status: string, err?: Error) => void) => {
+  subscribeCallback = cb;
   if (cb) cb("SUBSCRIBED");
   return mockChannel;
 });
@@ -16,10 +19,11 @@ const mockChannel = {
 
 const mockInsert = vi.fn().mockResolvedValue({ error: null });
 const mockFrom = vi.fn(() => ({ insert: mockInsert }));
+const mockChannelFactory = vi.fn(() => mockChannel);
 
 vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(() => ({
-    channel: vi.fn(() => mockChannel),
+    channel: mockChannelFactory,
     from: mockFrom,
   })),
 }));
@@ -31,8 +35,13 @@ describe("Chat", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    subscribeCallback = undefined;
     mockInsert.mockResolvedValue({ error: null });
     chat = new Chat("https://test.supabase.co", "test-key");
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   describe("sendMessage", () => {
@@ -122,10 +131,84 @@ describe("Chat", () => {
     });
   });
 
+  describe("reconnect", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    it.each(["TIMED_OUT", "CHANNEL_ERROR", "CLOSED"])(
+      "triggers reconnect on %s",
+      (status) => {
+        chat.subscribe(vi.fn());
+        subscribeCallback!(status, new Error("fail"));
+
+        vi.advanceTimersByTime(3000);
+
+        expect(mockUnsubscribe).toHaveBeenCalled();
+        expect(mockChannelFactory).toHaveBeenCalledTimes(2);
+        expect(mockSubscribe).toHaveBeenCalledTimes(2);
+      }
+    );
+
+    it("does not trigger reconnect on SUBSCRIBED", () => {
+      chat.subscribe(vi.fn());
+
+      vi.advanceTimersByTime(5000);
+
+      expect(mockChannelFactory).toHaveBeenCalledTimes(1);
+    });
+
+    it("waits 3 seconds before reconnecting", () => {
+      chat.subscribe(vi.fn());
+      subscribeCallback!("CHANNEL_ERROR");
+
+      vi.advanceTimersByTime(2999);
+      expect(mockChannelFactory).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(1);
+      expect(mockChannelFactory).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not schedule multiple reconnects from rapid errors", () => {
+      chat.subscribe(vi.fn());
+
+      subscribeCallback!("TIMED_OUT");
+      subscribeCallback!("CHANNEL_ERROR");
+      subscribeCallback!("CLOSED");
+
+      vi.advanceTimersByTime(3000);
+
+      expect(mockChannelFactory).toHaveBeenCalledTimes(2);
+    });
+
+    it("re-subscribes with the same onMessage callback after reconnect", () => {
+      const onMessage = vi.fn();
+      chat.subscribe(onMessage);
+      subscribeCallback!("CHANNEL_ERROR");
+
+      vi.advanceTimersByTime(3000);
+
+      expect(mockOn).toHaveBeenCalledTimes(2);
+      expect(mockOn.mock.calls[1][2]).toBeDefined();
+    });
+  });
+
   describe("unsubscribe", () => {
     it("calls channel unsubscribe", () => {
       chat.unsubscribe();
       expect(mockUnsubscribe).toHaveBeenCalled();
+    });
+
+    it("cancels a pending reconnect timer", () => {
+      vi.useFakeTimers();
+      chat.subscribe(vi.fn());
+      subscribeCallback!("CHANNEL_ERROR");
+
+      chat.unsubscribe();
+
+      vi.advanceTimersByTime(5000);
+
+      expect(mockChannelFactory).toHaveBeenCalledTimes(1);
     });
   });
 });
