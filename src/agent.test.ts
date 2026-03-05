@@ -257,18 +257,30 @@ describe("processAgentStream", () => {
 
   it("emits tool_progress events", async () => {
     const messages = [
-      { type: "tool_progress", content: "Running..." },
+      { type: "tool_progress", tool_name: "Bash", tool_use_id: "tool-1" },
       { type: "result" },
     ];
 
     const { events } = await collectEvents(messages);
 
-    expect(events).toContainEqual({ type: "tool_progress", progress: "Running..." });
+    expect(events).toContainEqual({ type: "tool_progress", progress: "Bash" });
   });
 
-  it("emits tool_result events", async () => {
+  it("emits tool_result events from user messages", async () => {
     const messages = [
-      { type: "tool_result", tool_use_id: "tool-1", content: "file contents" },
+      {
+        type: "user",
+        tool_use_result: true,
+        message: {
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "tool-1",
+              content: "file contents",
+            },
+          ],
+        },
+      },
       { type: "result" },
     ];
 

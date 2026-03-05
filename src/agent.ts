@@ -142,25 +142,29 @@ export async function processAgentStream(
       continue;
     }
 
-    if (message.type === "tool_result") {
-      onEvent({
-        type: "tool_result",
-        tool_use_id: message.tool_use_id ?? "",
-        content:
-          typeof message.content === "string"
-            ? message.content
-            : JSON.stringify(message.content ?? ""),
-      });
+    if (message.type === "user" && message.tool_use_result != null) {
+      const content = message.message?.content;
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (block.type === "tool_result") {
+            onEvent({
+              type: "tool_result",
+              tool_use_id: block.tool_use_id ?? "",
+              content:
+                typeof block.content === "string"
+                  ? block.content
+                  : JSON.stringify(block.content ?? ""),
+            });
+          }
+        }
+      }
       continue;
     }
 
     if (message.type === "tool_progress") {
       onEvent({
         type: "tool_progress",
-        progress:
-          typeof message.content === "string"
-            ? message.content
-            : JSON.stringify(message.content ?? ""),
+        progress: message.tool_name ?? "",
       });
       continue;
     }
