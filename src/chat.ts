@@ -5,6 +5,7 @@ const MILESTONE_TYPES = new Set([
   "assistant_message",
   "tool_use_start",
   "tool_result",
+  "tool_use_summary",
   "result",
 ]);
 

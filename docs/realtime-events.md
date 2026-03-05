@@ -74,7 +74,7 @@ Every broadcast payload has the shape `{ type: string, ...fields }`. The `type` 
 | `tool_use_stop` | _(none)_ | No | Tool input complete |
 | `tool_progress` | `progress: string` | No | Tool execution progress update |
 | `tool_result` | `tool_use_id: string`, `content: string` | Yes | Tool execution result |
-| `tool_use_summary` | `summary: string` | No | Tool use summary |
+| `tool_use_summary` | `summary: string` | Yes | Tool use summary |
 
 ### Session and lifecycle
 
@@ -125,6 +125,7 @@ Only milestone events are inserted into the `agent_events` table:
 - `assistant_message`
 - `tool_use_start`
 - `tool_result`
+- `tool_use_summary`
 - `result`
 
 All other events are broadcast-only (ephemeral). Clients that connect mid-stream can query `agent_events` for history and rely on broadcasts for live updates.

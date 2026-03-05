@@ -119,6 +119,18 @@ describe("Chat", () => {
       expect(mockFrom).toHaveBeenCalledWith("agent_events");
     });
 
+    it("persists tool_use_summary events", async () => {
+      await chat.persistAgentEvent(
+        { type: "tool_use_summary", summary: "Searched the web" }
+      );
+
+      expect(mockFrom).toHaveBeenCalledWith("agent_events");
+      expect(mockInsert).toHaveBeenCalledWith({
+        type: "tool_use_summary",
+        payload: { summary: "Searched the web" },
+      });
+    });
+
     it("skips non-milestone events", async () => {
       await chat.persistAgentEvent({ type: "text_delta", text: "hi" });
       await chat.persistAgentEvent({ type: "thinking_start" });
