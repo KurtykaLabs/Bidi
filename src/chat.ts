@@ -1,9 +1,16 @@
 import { createClient, type SupabaseClient, type RealtimeChannel } from "@supabase/supabase-js";
+import type { AgentEvent } from "./agent.js";
+
+const MILESTONE_TYPES = new Set([
+  "assistant_message",
+  "tool_use_start",
+  "tool_result",
+  "result",
+]);
 
 export class Chat {
   private supabase: SupabaseClient;
   private channel: RealtimeChannel;
-  private sentMessages = new Set<string>();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
   private reconnectAttempts = 0;
@@ -15,19 +22,16 @@ export class Chat {
     this.channel = this.supabase.channel("chat");
   }
 
-  subscribe(onMessage: (text: string, sender: string) => void): void {
+  subscribe(onMessage: (text: string) => void): void {
     this.disposed = false;
     this.channel
       .on(
         "postgres_changes",
-        { event: "INSERT", schema: "public", table: "messages" },
+        { event: "INSERT", schema: "public", table: "human_events" },
         (payload) => {
-          const text = payload.new.text as string;
-          const sender = payload.new.sender as string;
-
-          if (this.sentMessages.delete(text)) return;
-
-          onMessage(text, sender);
+          const payloadData = payload.new.payload as { text?: string };
+          const text = payloadData?.text ?? "";
+          onMessage(text);
         }
       )
       .subscribe((status, err) => {
@@ -41,7 +45,7 @@ export class Chat {
       });
   }
 
-  private reconnect(onMessage: (text: string, sender: string) => void): void {
+  private reconnect(onMessage: (text: string) => void): void {
     if (this.reconnectTimer) return;
     const delay = Math.min(
       Chat.BASE_RECONNECT_DELAY * 2 ** this.reconnectAttempts,
@@ -57,28 +61,22 @@ export class Chat {
     }, delay);
   }
 
-  broadcastTyping(text: string, sender: string): void {
+  broadcastAgentEvent(event: AgentEvent, sender: string): void {
     this.channel.send({
       type: "broadcast",
-      event: "typing",
-      payload: { currentLine: text, sender },
+      event: "agent_event",
+      payload: { ...event, sender },
     });
   }
 
-  async sendMessage(text: string, sender: string): Promise<void> {
-    this.sentMessages.add(text);
+  async persistAgentEvent(event: AgentEvent, sessionId?: string | null): Promise<void> {
+    if (!MILESTONE_TYPES.has(event.type)) return;
+
+    const { type, ...payload } = event;
     const { error } = await this.supabase
-      .from("messages")
-      .insert({ text, sender });
-    if (error) {
-      this.sentMessages.delete(text);
-      throw error;
-    }
-    this.channel.send({
-      type: "broadcast",
-      event: "message",
-      payload: { text, sender },
-    });
+      .from("agent_events")
+      .insert({ type, payload, session_id: sessionId ?? null });
+    if (error) throw error;
   }
 
   unsubscribe(): void {
