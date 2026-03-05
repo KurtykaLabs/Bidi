@@ -77,50 +77,43 @@ describe("Chat", () => {
   describe("persistAgentEvent", () => {
     it("inserts milestone events into agent_events table", async () => {
       await chat.persistAgentEvent(
-        { type: "assistant_message", text: "Hello" },
-        "sess-1"
+        { type: "assistant_message", text: "Hello" }
       );
 
       expect(mockFrom).toHaveBeenCalledWith("agent_events");
       expect(mockInsert).toHaveBeenCalledWith({
         type: "assistant_message",
         payload: { text: "Hello" },
-        session_id: "sess-1",
       });
     });
 
     it("persists tool_use_start events", async () => {
       await chat.persistAgentEvent(
-        { type: "tool_use_start", name: "read_file", id: "tool-1" },
-        "sess-1"
+        { type: "tool_use_start", name: "read_file", id: "tool-1" }
       );
 
       expect(mockFrom).toHaveBeenCalledWith("agent_events");
       expect(mockInsert).toHaveBeenCalledWith({
         type: "tool_use_start",
         payload: { name: "read_file", id: "tool-1" },
-        session_id: "sess-1",
       });
     });
 
     it("persists tool_result events", async () => {
       await chat.persistAgentEvent(
-        { type: "tool_result", tool_use_id: "tool-1", content: "done" },
-        null
+        { type: "tool_result", tool_use_id: "tool-1", content: "done" }
       );
 
       expect(mockFrom).toHaveBeenCalledWith("agent_events");
       expect(mockInsert).toHaveBeenCalledWith({
         type: "tool_result",
         payload: { tool_use_id: "tool-1", content: "done" },
-        session_id: null,
       });
     });
 
     it("persists result events", async () => {
       await chat.persistAgentEvent(
-        { type: "result", session_id: "sess-1", duration_ms: 500 },
-        "sess-1"
+        { type: "result", session_id: "sess-1", duration_ms: 500 }
       );
 
       expect(mockFrom).toHaveBeenCalledWith("agent_events");
@@ -144,8 +137,7 @@ describe("Chat", () => {
 
       await expect(
         chat.persistAgentEvent(
-          { type: "assistant_message", text: "Hello" },
-          "sess-1"
+          { type: "assistant_message", text: "Hello" }
         )
       ).rejects.toEqual({ message: "DB error" });
     });

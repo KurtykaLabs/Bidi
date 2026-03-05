@@ -27,7 +27,7 @@ channel
     "postgres_changes",
     { event: "INSERT", schema: "public", table: "agent_events" },
     ({ new: row }) => {
-      // row.type, row.payload, row.session_id, row.created_at
+      // row.type, row.payload, row.created_at
     }
   )
   .subscribe();
@@ -149,7 +149,6 @@ All other events are broadcast-only (ephemeral). Clients that connect mid-stream
 | `id` | `uuid` (PK) | Auto-generated |
 | `type` | `text` | Event type |
 | `payload` | `jsonb` | Event data |
-| `session_id` | `text` | Conversation session ID |
 | `created_at` | `timestamptz` | Auto-generated |
 
 ---

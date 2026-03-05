@@ -69,13 +69,13 @@ export class Chat {
     });
   }
 
-  async persistAgentEvent(event: AgentEvent, sessionId?: string | null): Promise<void> {
+  async persistAgentEvent(event: AgentEvent): Promise<void> {
     if (!MILESTONE_TYPES.has(event.type)) return;
 
     const { type, ...payload } = event;
     const { error } = await this.supabase
       .from("agent_events")
-      .insert({ type, payload, session_id: sessionId ?? null });
+      .insert({ type, payload });
     if (error) throw error;
   }
 

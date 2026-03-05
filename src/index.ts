@@ -28,7 +28,7 @@ async function getAgentResponse(userText: string) {
 
     const onEvent = (event: AgentEvent) => {
       chat.broadcastAgentEvent(event, "agent");
-      chat.persistAgentEvent(event, currentSessionId).catch((err) => {
+      chat.persistAgentEvent(event).catch((err) => {
         console.error(`[error] Persist: ${err.message}`);
       });
 
