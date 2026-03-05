@@ -22,7 +22,7 @@ CLI agent for the Bidi chat system. Type characters and they broadcast in real-t
 3. Install and run:
    ```
    npm install
-   node index.js
+   npm start
    ```
 
 ## Usage
