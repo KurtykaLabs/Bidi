@@ -44,90 +44,150 @@ describe("Chat", () => {
     vi.useRealTimers();
   });
 
-  describe("sendMessage", () => {
-    it("inserts into DB with correct sender and broadcasts", async () => {
-      await chat.sendMessage("hello", "user");
+  describe("broadcastAgentEvent", () => {
+    it("sends correct payload shape with sender", () => {
+      chat.broadcastAgentEvent({ type: "text_delta", text: "Hello" }, "agent");
 
-      expect(mockFrom).toHaveBeenCalledWith("messages");
-      expect(mockInsert).toHaveBeenCalledWith({ text: "hello", sender: "user" });
       expect(mockSend).toHaveBeenCalledWith({
         type: "broadcast",
-        event: "message",
-        payload: { text: "hello", sender: "user" },
+        event: "agent_event",
+        payload: { type: "text_delta", text: "Hello", sender: "agent" },
       });
     });
 
-    it("adds to sentMessages so own messages are deduplicated", async () => {
-      const onMessage = vi.fn();
-      chat.subscribe(onMessage);
+    it("spreads all event fields into payload", () => {
+      chat.broadcastAgentEvent(
+        { type: "tool_use_start", name: "read_file", id: "tool-1" },
+        "agent"
+      );
 
-      await chat.sendMessage("hello", "user");
+      expect(mockSend).toHaveBeenCalledWith({
+        type: "broadcast",
+        event: "agent_event",
+        payload: {
+          type: "tool_use_start",
+          name: "read_file",
+          id: "tool-1",
+          sender: "agent",
+        },
+      });
+    });
+  });
 
-      // Simulate the postgres_changes callback for our own message
-      const postgresCallback = mockOn.mock.calls[0][2];
-      postgresCallback({ new: { text: "hello", sender: "user" } });
+  describe("persistAgentEvent", () => {
+    it("inserts milestone events into agent_events table", async () => {
+      await chat.persistAgentEvent(
+        { type: "assistant_message", text: "Hello" }
+      );
 
-      expect(onMessage).not.toHaveBeenCalled();
+      expect(mockFrom).toHaveBeenCalledWith("agent_events");
+      expect(mockInsert).toHaveBeenCalledWith({
+        type: "assistant_message",
+        payload: { text: "Hello" },
+      });
     });
 
-    it("removes from sentMessages and throws on DB error", async () => {
+    it("persists tool_use_start events", async () => {
+      await chat.persistAgentEvent(
+        { type: "tool_use_start", name: "read_file", id: "tool-1" }
+      );
+
+      expect(mockFrom).toHaveBeenCalledWith("agent_events");
+      expect(mockInsert).toHaveBeenCalledWith({
+        type: "tool_use_start",
+        payload: { name: "read_file", id: "tool-1" },
+      });
+    });
+
+    it("persists tool_result events", async () => {
+      await chat.persistAgentEvent(
+        { type: "tool_result", tool_use_id: "tool-1", content: "done" }
+      );
+
+      expect(mockFrom).toHaveBeenCalledWith("agent_events");
+      expect(mockInsert).toHaveBeenCalledWith({
+        type: "tool_result",
+        payload: { tool_use_id: "tool-1", content: "done" },
+      });
+    });
+
+    it("persists result events", async () => {
+      await chat.persistAgentEvent(
+        { type: "result", session_id: "sess-1", duration_ms: 500 }
+      );
+
+      expect(mockFrom).toHaveBeenCalledWith("agent_events");
+    });
+
+    it("persists tool_use_summary events", async () => {
+      await chat.persistAgentEvent(
+        { type: "tool_use_summary", summary: "Searched the web" }
+      );
+
+      expect(mockFrom).toHaveBeenCalledWith("agent_events");
+      expect(mockInsert).toHaveBeenCalledWith({
+        type: "tool_use_summary",
+        payload: { summary: "Searched the web" },
+      });
+    });
+
+    it("skips non-milestone events", async () => {
+      await chat.persistAgentEvent({ type: "text_delta", text: "hi" });
+      await chat.persistAgentEvent({ type: "thinking_start" });
+      await chat.persistAgentEvent({ type: "thinking_delta", text: "hmm" });
+      await chat.persistAgentEvent({ type: "thinking_stop" });
+      await chat.persistAgentEvent({ type: "tool_use_delta", input_json: "{}" });
+      await chat.persistAgentEvent({ type: "tool_use_stop" });
+      await chat.persistAgentEvent({ type: "session_id", id: "s" });
+
+      expect(mockFrom).not.toHaveBeenCalled();
+      expect(mockInsert).not.toHaveBeenCalled();
+    });
+
+    it("throws on DB error", async () => {
       mockInsert.mockResolvedValue({ error: { message: "DB error" } });
 
-      await expect(chat.sendMessage("hello", "user")).rejects.toEqual({
-        message: "DB error",
-      });
-
-      // After error, the message should be removed from sentMessages,
-      // so a subsequent incoming message should NOT be deduplicated
-      const onMessage = vi.fn();
-      chat.subscribe(onMessage);
-
-      const postgresCallback = mockOn.mock.calls[0][2];
-      postgresCallback({ new: { text: "hello", sender: "user" } });
-
-      expect(onMessage).toHaveBeenCalledWith("hello", "user");
+      await expect(
+        chat.persistAgentEvent(
+          { type: "assistant_message", text: "Hello" }
+        )
+      ).rejects.toEqual({ message: "DB error" });
     });
   });
 
   describe("subscribe", () => {
-    it("fires callback for external messages", () => {
-      const onMessage = vi.fn();
-      chat.subscribe(onMessage);
+    it("listens on human_events table", () => {
+      chat.subscribe(vi.fn());
 
       expect(mockOn).toHaveBeenCalledWith(
         "postgres_changes",
-        { event: "INSERT", schema: "public", table: "messages" },
+        { event: "INSERT", schema: "public", table: "human_events" },
         expect.any(Function)
       );
-
-      const postgresCallback = mockOn.mock.calls[0][2];
-      postgresCallback({ new: { text: "hi there", sender: "other" } });
-
-      expect(onMessage).toHaveBeenCalledWith("hi there", "other");
     });
 
-    it("does not fire callback for own messages", async () => {
+    it("fires callback with text from payload", () => {
       const onMessage = vi.fn();
       chat.subscribe(onMessage);
 
-      await chat.sendMessage("my message", "user");
+      const postgresCallback = mockOn.mock.calls[0][2];
+      postgresCallback({
+        new: { type: "message", payload: { text: "hi there" } },
+      });
+
+      expect(onMessage).toHaveBeenCalledWith("hi there");
+    });
+
+    it("ignores events with missing or empty text", () => {
+      const onMessage = vi.fn();
+      chat.subscribe(onMessage);
 
       const postgresCallback = mockOn.mock.calls[0][2];
-      postgresCallback({ new: { text: "my message", sender: "user" } });
+      postgresCallback({ new: { type: "message", payload: {} } });
+      postgresCallback({ new: { type: "message", payload: { text: "" } } });
+      postgresCallback({ new: { type: "message", payload: { text: "   " } } });
 
       expect(onMessage).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("broadcastTyping", () => {
-    it("sends correct payload shape", () => {
-      chat.broadcastTyping("typing...", "user");
-
-      expect(mockSend).toHaveBeenCalledWith({
-        type: "broadcast",
-        event: "typing",
-        payload: { currentLine: "typing...", sender: "user" },
-      });
     });
   });
 
@@ -193,29 +253,24 @@ describe("Chat", () => {
     });
 
     it("uses exponential backoff on repeated failures", () => {
-      // Prevent auto-SUBSCRIBED on reconnect so the counter doesn't reset
       mockSubscribe.mockImplementation((cb?: any) => {
         subscribeCallback = cb;
         return mockChannel;
       });
 
       chat.subscribe(vi.fn());
-      // Manually fire initial SUBSCRIBED
       subscribeCallback!("SUBSCRIBED");
 
-      // First failure: 3s delay
       subscribeCallback!("CHANNEL_ERROR");
       vi.advanceTimersByTime(3000);
       expect(mockChannelFactory).toHaveBeenCalledTimes(2);
 
-      // Second failure: 6s delay (no SUBSCRIBED fired, simulating persistent failure)
       subscribeCallback!("CHANNEL_ERROR");
       vi.advanceTimersByTime(5999);
       expect(mockChannelFactory).toHaveBeenCalledTimes(2);
       vi.advanceTimersByTime(1);
       expect(mockChannelFactory).toHaveBeenCalledTimes(3);
 
-      // Third failure: 12s delay
       subscribeCallback!("CHANNEL_ERROR");
       vi.advanceTimersByTime(11999);
       expect(mockChannelFactory).toHaveBeenCalledTimes(3);
@@ -232,13 +287,11 @@ describe("Chat", () => {
       chat.subscribe(vi.fn());
       subscribeCallback!("SUBSCRIBED");
 
-      // Simulate many failures to exceed the cap (3s, 6s, 12s, 24s, 48s, then 60s cap)
       for (let i = 0; i < 10; i++) {
         subscribeCallback!("CHANNEL_ERROR");
         vi.advanceTimersByTime(60_000);
       }
 
-      // Next failure should still be capped at 60s
       subscribeCallback!("CHANNEL_ERROR");
       vi.advanceTimersByTime(59_999);
       const countBefore = mockChannelFactory.mock.calls.length;
@@ -247,7 +300,6 @@ describe("Chat", () => {
     });
 
     it("resets backoff after successful reconnect", () => {
-      // Don't auto-fire SUBSCRIBED so we control the flow
       mockSubscribe.mockImplementation((cb?: any) => {
         subscribeCallback = cb;
         return mockChannel;
@@ -256,15 +308,12 @@ describe("Chat", () => {
       chat.subscribe(vi.fn());
       subscribeCallback!("SUBSCRIBED");
 
-      // First failure: 3s
       subscribeCallback!("CHANNEL_ERROR");
       vi.advanceTimersByTime(3000);
       expect(mockChannelFactory).toHaveBeenCalledTimes(2);
 
-      // Reconnect succeeds
       subscribeCallback!("SUBSCRIBED");
 
-      // Another failure should be back to 3s (not 6s)
       subscribeCallback!("CHANNEL_ERROR");
       vi.advanceTimersByTime(3000);
       expect(mockChannelFactory).toHaveBeenCalledTimes(3);
@@ -295,7 +344,6 @@ describe("Chat", () => {
 
       chat.unsubscribe();
 
-      // Simulate Supabase firing CLOSED as a side-effect of channel.unsubscribe()
       subscribeCallback!("CLOSED");
 
       vi.advanceTimersByTime(5000);

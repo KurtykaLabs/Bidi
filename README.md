@@ -1,6 +1,6 @@
 # Bidi
 
-CLI agent for the Bidi chat system. Type characters and they broadcast in real-time via Supabase. Press Enter to save the message.
+Real-time agent that listens for human messages via Supabase Realtime and auto-responds using the Claude Agent SDK, streaming all events (thinking, tool use, text, results) back through a single broadcast channel.
 
 ## Setup
 
@@ -9,14 +9,9 @@ CLI agent for the Bidi chat system. Type characters and they broadcast in real-t
    cp .env.example .env
    ```
 
-2. Create the `messages` table in your Supabase SQL Editor:
-   ```sql
-   create table messages (
-     id uuid default gen_random_uuid() primary key,
-     text text not null,
-     sender text not null default 'agent',
-     created_at timestamptz default now()
-   );
+2. Run the migration in your Supabase SQL Editor (or via `supabase db push`):
+   ```
+   supabase/migrations/001_event_tables.sql
    ```
 
 3. Install and run:
@@ -25,9 +20,10 @@ CLI agent for the Bidi chat system. Type characters and they broadcast in real-t
    npm start
    ```
 
-## Usage
+## Architecture
 
-- Type characters — broadcasted live on the `chat` channel
-- Enter — saves message to the `messages` table
-- Backspace — deletes last character
-- Ctrl+C — quit
+See [`docs/realtime-events.md`](docs/realtime-events.md) for the full client spec.
+
+- **`human_events`** table — clients insert messages here to talk to the agent
+- **`agent_events`** table — milestone events (assistant messages, tool use, results) are persisted here
+- **`agent_event`** broadcast — all SDK events are broadcast in real-time on the `chat` channel
