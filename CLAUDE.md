@@ -23,7 +23,7 @@ Single-package TypeScript project using ESM modules (`"type": "module"`).
 **`src/chat.ts`** — `Chat` class wrapping Supabase realtime. Handles:
 - Channel subscription with postgres_changes listener on `human_events` table
 - `broadcastAgentEvent()` — broadcasts `AgentEvent` on `"agent_event"` channel
-- `persistAgentEvent()` — inserts milestone events (`assistant_message`, `tool_use_start`, `tool_result`, `result`) to `agent_events` table
+- `persistAgentEvent()` — inserts milestone events (`assistant_message`, `tool_use_start`, `tool_use_summary`, `tool_result`, `result`) to `agent_events` table
 - Exponential backoff reconnection (3s base, 60s max) with `disposed` flag to prevent reconnects after unsubscribe
 
 **`src/agent.ts`** — Stream processing for Claude Agent SDK responses:

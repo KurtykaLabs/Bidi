@@ -178,16 +178,16 @@ describe("Chat", () => {
       expect(onMessage).toHaveBeenCalledWith("hi there");
     });
 
-    it("handles missing text in payload", () => {
+    it("ignores events with missing or empty text", () => {
       const onMessage = vi.fn();
       chat.subscribe(onMessage);
 
       const postgresCallback = mockOn.mock.calls[0][2];
-      postgresCallback({
-        new: { type: "message", payload: {} },
-      });
+      postgresCallback({ new: { type: "message", payload: {} } });
+      postgresCallback({ new: { type: "message", payload: { text: "" } } });
+      postgresCallback({ new: { type: "message", payload: { text: "   " } } });
 
-      expect(onMessage).toHaveBeenCalledWith("");
+      expect(onMessage).not.toHaveBeenCalled();
     });
   });
 

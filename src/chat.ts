@@ -32,6 +32,7 @@ export class Chat {
         (payload) => {
           const payloadData = payload.new.payload as { text?: string };
           const text = payloadData?.text ?? "";
+          if (!text.trim()) return;
           onMessage(text);
         }
       )
