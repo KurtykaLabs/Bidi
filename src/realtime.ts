@@ -67,7 +67,10 @@ export class RealtimeListener {
       channel = this.supabase.channel(`channel:${channelId}`);
       const ready = new Promise<void>((resolve) => {
         channel!.subscribe((status) => {
-          if (status === "SUBSCRIBED") resolve();
+          if (status === "SUBSCRIBED") {
+            console.log(`[realtime] broadcast channel ready (channel:${channelId})`);
+            resolve();
+          }
         });
       });
       this.broadcastReady.set(channelId, ready);
