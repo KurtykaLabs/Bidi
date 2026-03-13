@@ -4,21 +4,21 @@ export interface HumanMessage {
   id: string;
   text: string;
   channelId: string;
-  threadId: string | null;
+  parentMessageId: string | null;
 }
 
 export async function createMessage(
   supabase: SupabaseClient,
   channelId: string,
   role: "human" | "agent",
-  threadId?: string | null
+  parentMessageId?: string | null
 ): Promise<string> {
   const { data, error } = await supabase
     .from("messages")
     .insert({
       channel_id: channelId,
       role,
-      ...(threadId && { thread_id: threadId }),
+      ...(parentMessageId && { parent_message_id: parentMessageId }),
     })
     .select("id")
     .single();
@@ -54,65 +54,38 @@ export async function getMessageText(
   return (data.payload as { text?: string })?.text ?? null;
 }
 
-export async function getThreadSessionId(
+export async function getChannelSessionId(
   supabase: SupabaseClient,
-  threadId: string
+  channelId: string
 ): Promise<string | null> {
   const { data, error } = await supabase
-    .from("messages")
+    .from("channels")
     .select("session_id")
-    .eq("thread_id", threadId)
-    .eq("role", "agent")
-    .order("created_at", { ascending: false })
-    .limit(1)
+    .eq("id", channelId)
     .single();
   if (error) return null;
   return data.session_id ?? null;
 }
 
-export async function createThread(
+export async function updateChannelSessionId(
   supabase: SupabaseClient,
-  channelId: string
-): Promise<string> {
-  const { data, error } = await supabase
-    .from("threads")
-    .insert({ channel_id: channelId })
-    .select("id")
-    .single();
-  if (error) throw error;
-  return data.id;
-}
-
-export async function updateThreadActivity(
-  supabase: SupabaseClient,
-  threadId: string
-): Promise<void> {
-  const { error } = await supabase
-    .from("threads")
-    .update({ last_activity_at: new Date().toISOString() })
-    .eq("id", threadId);
-  if (error) throw error;
-}
-
-export async function updateMessageSessionId(
-  supabase: SupabaseClient,
-  messageId: string,
+  channelId: string,
   sessionId: string
 ): Promise<void> {
   const { error } = await supabase
-    .from("messages")
+    .from("channels")
     .update({ session_id: sessionId })
-    .eq("id", messageId);
+    .eq("id", channelId);
   if (error) throw error;
 }
 
 export async function getHumanMessagesSince(
   supabase: SupabaseClient,
   since: string
-): Promise<Array<{ id: string; role: string; channel_id: string; thread_id: string | null; created_at: string }>> {
+): Promise<Array<{ id: string; role: string; channel_id: string; parent_message_id: string | null; created_at: string }>> {
   const { data, error } = await supabase
     .from("messages")
-    .select("id, role, channel_id, thread_id, created_at")
+    .select("id, role, channel_id, parent_message_id, created_at")
     .eq("role", "human")
     .gt("created_at", since)
     .order("created_at", { ascending: true });
@@ -129,7 +102,7 @@ export async function getChannelSummary(
     .from("messages")
     .select("role, events!inner(type, payload)")
     .eq("channel_id", channelId)
-    .is("thread_id", null)
+    .is("parent_message_id", null)
     .in("events.type", ["text", "assistant_message"])
     .order("created_at", { ascending: false })
     .limit(limit);

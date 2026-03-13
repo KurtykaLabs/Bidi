@@ -66,14 +66,14 @@ describe("RealtimeListener", () => {
 
       const postgresCallback = mockOn.mock.calls[0][2];
       postgresCallback({
-        new: { id: "msg-1", role: "human", channel_id: "ch-1", thread_id: null, created_at: "2026-01-01T00:00:00Z" },
+        new: { id: "msg-1", role: "human", channel_id: "ch-1", parent_message_id: null, created_at: "2026-01-01T00:00:00Z" },
       });
 
       expect(onMessage).toHaveBeenCalledWith({
         id: "msg-1",
         role: "human",
         channel_id: "ch-1",
-        thread_id: null,
+        parent_message_id: null,
         created_at: "2026-01-01T00:00:00Z",
       });
     });
@@ -84,26 +84,26 @@ describe("RealtimeListener", () => {
 
       const postgresCallback = mockOn.mock.calls[0][2];
       postgresCallback({
-        new: { id: "msg-1", role: "agent", channel_id: "ch-1", thread_id: null, created_at: "2026-01-01T00:00:00Z" },
+        new: { id: "msg-1", role: "agent", channel_id: "ch-1", parent_message_id: null, created_at: "2026-01-01T00:00:00Z" },
       });
 
       expect(onMessage).not.toHaveBeenCalled();
     });
 
-    it("passes through thread_id when present", () => {
+    it("passes through parent_message_id when present", () => {
       const onMessage = vi.fn();
       listener.subscribe(onMessage);
 
       const postgresCallback = mockOn.mock.calls[0][2];
       postgresCallback({
-        new: { id: "msg-2", role: "human", channel_id: "ch-1", thread_id: "thread-1", created_at: "2026-01-01T00:00:01Z" },
+        new: { id: "msg-2", role: "human", channel_id: "ch-1", parent_message_id: "thread-1", created_at: "2026-01-01T00:00:01Z" },
       });
 
       expect(onMessage).toHaveBeenCalledWith({
         id: "msg-2",
         role: "human",
         channel_id: "ch-1",
-        thread_id: "thread-1",
+        parent_message_id: "thread-1",
         created_at: "2026-01-01T00:00:01Z",
       });
     });

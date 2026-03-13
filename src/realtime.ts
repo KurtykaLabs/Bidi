@@ -6,7 +6,7 @@ export interface MessageRow {
   id: string;
   role: string;
   channel_id: string;
-  thread_id: string | null;
+  parent_message_id: string | null;
   created_at: string;
 }
 

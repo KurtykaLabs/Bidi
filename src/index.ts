@@ -6,10 +6,9 @@ import {
   createMessage,
   persistEvent,
   getMessageText,
-  getThreadSessionId,
+  getChannelSessionId,
   getChannelSummary,
-  updateMessageSessionId,
-  updateThreadActivity,
+  updateChannelSessionId,
   type HumanMessage,
 } from "./db.js";
 import { processAgentStream, type AgentEvent } from "./agent.js";
@@ -42,27 +41,24 @@ const listener = new RealtimeListener(supabase);
 const responding = new Set<string>();
 
 async function getAgentResponse(msg: HumanMessage) {
-  const key = msg.threadId ?? msg.id;
+  const key = msg.parentMessageId ?? msg.id;
   if (responding.has(key)) return;
   responding.add(key);
 
   console.log(`[agent] thinking (channel: ${msg.channelId})...`);
 
   try {
-    let sessionId: string | null = null;
-    if (msg.threadId) {
-      sessionId = await getThreadSessionId(supabase, msg.threadId);
-    }
+    const sessionId = await getChannelSessionId(supabase, msg.channelId);
 
     const agentMessageId = await createMessage(
       supabase,
       msg.channelId,
       "agent",
-      msg.threadId
+      msg.parentMessageId
     );
 
     let prompt = msg.text;
-    if (msg.threadId && !sessionId) {
+    if (msg.parentMessageId && !sessionId) {
       const summary = await getChannelSummary(supabase, msg.channelId);
       if (summary) {
         prompt = `[Channel context]\n${summary}\n\n[Thread message]\n${msg.text}`;
@@ -97,10 +93,7 @@ async function getAgentResponse(msg: HumanMessage) {
     const result = await processAgentStream(queryInstance, onEvent);
 
     if (result.sessionId) {
-      await updateMessageSessionId(supabase, agentMessageId, result.sessionId);
-    }
-    if (msg.threadId) {
-      await updateThreadActivity(supabase, msg.threadId);
+      await updateChannelSessionId(supabase, msg.channelId, result.sessionId);
     }
     if (result.text) {
       process.stdout.write("\n");
@@ -125,7 +118,7 @@ listener.subscribe(async (row: MessageRow) => {
     id: row.id,
     text,
     channelId: row.channel_id,
-    threadId: row.thread_id,
+    parentMessageId: row.parent_message_id,
   };
 
   console.log(`[user] (channel: ${msg.channelId}) ${msg.text}`);

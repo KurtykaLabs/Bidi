@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Bidi is a real-time agent that listens for human messages via Supabase Realtime and auto-responds using the Claude Agent SDK. Conversations are organized into channels with optional threads. All SDK events (thinking, tool use, text deltas, results) are broadcast per-channel, with milestone events persisted as rows in an `events` table under parent messages.
+Bidi is a real-time agent that listens for human messages via Supabase Realtime and auto-responds using the Claude Agent SDK. Conversations are organized into channels (one Claude session per channel). Messages can be replies via `parent_message_id`. All SDK events (thinking, tool use, text deltas, results) are broadcast per-channel, with milestone events persisted as rows in an `events` table under parent messages.
 
 ## Commands
 
@@ -21,16 +21,18 @@ Single-package TypeScript project using ESM modules (`"type": "module"`).
 ### Data model
 
 ```
-channels → threads → messages → events (persisted milestones)
-                ↑                   ↳ streaming deltas broadcast-only
-    top-level messages also live directly in channels
+channels → messages → events (persisted milestones)
+    ↑          ↑          ↳ streaming deltas broadcast-only
+    |          ↳ parent_message_id (self-referencing for replies)
+    ↳ session_id (one Claude conversation per channel)
 ```
 
 - Messages are containers (no `text` column) — content lives in child `events` rows
 - Human messages have a single `text` event; agent messages have multiple events
-- Threads link back to a root message; `session_id` on agent messages enables conversation continuity
+- `session_id` lives on channels for conversation continuity
+- Replies use `parent_message_id` (self-referencing FK on messages)
 
-**`src/index.ts`** — Entry point. Creates a `RealtimeListener`, subscribes to message INSERTs. On human message, fetches text event (with retry), creates agent message, streams response via Claude Agent SDK `query()`, persists milestone events, and updates session/thread metadata.
+**`src/index.ts`** — Entry point. Creates a `RealtimeListener`, subscribes to message INSERTs. On human message, fetches text event (with retry), creates agent message, streams response via Claude Agent SDK `query()`, persists milestone events, and updates channel session.
 
 **`src/realtime.ts`** — `RealtimeListener` class wrapping Supabase Realtime. Handles:
 - Global subscription with postgres_changes listener on `messages` table (no channel filter)
@@ -42,11 +44,9 @@ channels → threads → messages → events (persisted milestones)
 **`src/db.ts`** — Database query helpers:
 - `createMessage()` / `persistEvent()` — insert message and event rows
 - `getMessageText()` — queries text event for a message
-- `getThreadSessionId()` — looks up most recent agent session_id in a thread
-- `createThread()` / `updateThreadActivity()` — thread lifecycle helpers
-- `updateMessageSessionId()` — sets session_id on agent messages after stream completes
+- `getChannelSessionId()` / `updateChannelSessionId()` — read/write session_id on channels
 - `getHumanMessagesSince()` — catch-up query for reconnect recovery
-- `getChannelSummary()` — fetches recent channel messages for thread context
+- `getChannelSummary()` — fetches recent top-level channel messages for context
 
 **`src/agent.ts`** — Stream processing for Claude Agent SDK responses:
 - `AgentEvent` — discriminated union of all event types (text_delta, thinking, tool_use, result, etc.)
@@ -59,6 +59,7 @@ channels → threads → messages → events (persisted milestones)
 **`supabase/migrations/`** — Database migrations:
 - `001_event_tables.sql` — Original `human_events` and `agent_events` tables (superseded)
 - `002_channels_threads_messages.sql` — Creates `channels`, `threads`, `messages`, `events` tables; drops old tables
+- `003_simplify_data_model.sql` — Drops `threads` table, moves `session_id` to channels, replaces `thread_id` with `parent_message_id`
 
 ## Testing
 

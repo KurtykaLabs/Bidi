@@ -4,7 +4,7 @@ Client reference for consuming Bidi agent events via Supabase Realtime.
 
 ## Channels
 
-Conversations are organized into channels. Each channel has its own Supabase Realtime channel named `channel:{channelId}`.
+Conversations are organized into channels. Each channel has its own Supabase Realtime channel named `channel:{channelId}` and a single Claude session (`session_id`).
 
 ### Subscribing to agent events (broadcast)
 
@@ -32,7 +32,7 @@ channel
       filter: `channel_id=eq.${channelId}`,
     },
     ({ new: row }) => {
-      // row.id, row.channel_id, row.thread_id, row.role, row.session_id
+      // row.id, row.channel_id, row.parent_message_id, row.role
     }
   )
   .subscribe();
@@ -48,7 +48,7 @@ const { data: msg } = await supabase
   .insert({
     channel_id: channelId,
     role: "human",
-    thread_id: threadId ?? undefined, // optional
+    parent_message_id: parentMessageId ?? undefined, // optional
   })
   .select("id")
   .single();
@@ -60,19 +60,21 @@ await supabase.from("events").insert({
 });
 ```
 
-### Creating a thread
+### Replying to a message
 
-Create a thread in a channel:
+To create a reply, set `parent_message_id` to the message you're replying to:
 
 ```typescript
-const { data: thread } = await supabase
-  .from("threads")
-  .insert({ channel_id: channelId })
+const { data: reply } = await supabase
+  .from("messages")
+  .insert({
+    channel_id: channelId,
+    role: "human",
+    parent_message_id: originalMessageId,
+  })
   .select("id")
   .single();
 ```
-
-Subsequent messages in the thread set `thread_id` to this value.
 
 ---
 
@@ -120,13 +122,14 @@ Every broadcast payload has the shape `{ type: string, message_id: string, ...fi
 ## Data Model
 
 ```
-channels → threads → messages → events (persisted milestones)
-                ↑                   ↳ streaming deltas broadcast-only
-    top-level messages also live directly in channels
+channels → messages → events (persisted milestones)
+    ↑          ↑          ↳ streaming deltas broadcast-only
+    |          ↳ parent_message_id (self-referencing for replies)
+    ↳ session_id (one Claude conversation per channel)
 ```
 
-- Messages can be top-level in a channel (no thread) or belong to a thread
-- Starting a thread from a message makes that message the thread's root
+- Messages can be top-level in a channel (no parent) or replies to another message
+- Replying to a message sets `parent_message_id` to the original message's ID
 - Messages are containers — no `text` column; content lives in child events
 - Human messages contain a single `text` event
 - Agent messages contain multiple events (text, tool uses, results)
@@ -141,15 +144,7 @@ channels → threads → messages → events (persisted milestones)
 |--------|------|-------------|
 | `id` | `uuid` (PK) | Auto-generated |
 | `name` | `text` | Channel name |
-| `created_at` | `timestamptz` | Auto-generated |
-
-### `threads`
-
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | `uuid` (PK) | Auto-generated |
-| `channel_id` | `uuid` (FK) | Parent channel |
-| `last_activity_at` | `timestamptz` | Updated on new messages |
+| `session_id` | `text` (nullable) | Claude SDK session ID |
 | `created_at` | `timestamptz` | Auto-generated |
 
 ### `messages`
@@ -158,9 +153,8 @@ channels → threads → messages → events (persisted milestones)
 |--------|------|-------------|
 | `id` | `uuid` (PK) | Auto-generated |
 | `channel_id` | `uuid` (FK) | Parent channel |
-| `thread_id` | `uuid` (FK, nullable) | Thread (null = top-level) |
+| `parent_message_id` | `uuid` (FK, nullable) | Parent message (null = top-level) |
 | `role` | `text` | `'human'` or `'agent'` |
-| `session_id` | `text` (nullable) | Claude SDK session ID |
 | `created_at` | `timestamptz` | Auto-generated |
 
 ### `events`

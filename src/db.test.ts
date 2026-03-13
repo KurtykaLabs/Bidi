@@ -8,9 +8,10 @@ const mockOrder = vi.fn(() => ({ limit: mockLimit }));
 const mockEq2 = vi.fn(() => ({ order: mockOrder }));
 const mockEq = vi.fn(() => ({ eq: mockEq2 }));
 const mockUpdate = vi.fn(() => ({ eq: vi.fn().mockResolvedValue({ error: null }) }));
+const mockEqSingle = vi.fn(() => ({ single: mockSingle }));
 const mockFrom = vi.fn((table: string) => ({
   insert: mockInsert,
-  select: vi.fn(() => ({ eq: mockEq })),
+  select: vi.fn(() => ({ eq: table === "channels" ? mockEqSingle : mockEq })),
   update: mockUpdate,
 }));
 
@@ -20,10 +21,8 @@ import {
   createMessage,
   persistEvent,
   getMessageText,
-  getThreadSessionId,
-  createThread,
-  updateThreadActivity,
-  updateMessageSessionId,
+  getChannelSessionId,
+  updateChannelSessionId,
   getChannelSummary,
 } from "./db.js";
 
@@ -47,17 +46,17 @@ describe("db", () => {
       expect(id).toBe("msg-1");
     });
 
-    it("includes thread_id when provided", async () => {
-      await createMessage(supabase, TEST_CHANNEL_ID, "agent", "thread-1");
+    it("includes parent_message_id when provided", async () => {
+      await createMessage(supabase, TEST_CHANNEL_ID, "agent", "parent-1");
 
       expect(mockInsert).toHaveBeenCalledWith({
         channel_id: TEST_CHANNEL_ID,
         role: "agent",
-        thread_id: "thread-1",
+        parent_message_id: "parent-1",
       });
     });
 
-    it("omits thread_id when passed null", async () => {
+    it("omits parent_message_id when passed null", async () => {
       await createMessage(supabase, TEST_CHANNEL_ID, "agent", null);
 
       expect(mockInsert).toHaveBeenCalledWith({
@@ -132,95 +131,49 @@ describe("db", () => {
     });
   });
 
-  describe("getThreadSessionId", () => {
-    it("returns session_id from most recent agent message", async () => {
+  describe("getChannelSessionId", () => {
+    it("returns session_id from channel", async () => {
       mockSingle.mockResolvedValue({
         data: { session_id: "sess-1" },
         error: null,
       });
 
-      const sid = await getThreadSessionId(supabase, "thread-1");
+      const sid = await getChannelSessionId(supabase, TEST_CHANNEL_ID);
       expect(sid).toBe("sess-1");
+      expect(mockFrom).toHaveBeenCalledWith("channels");
     });
 
-    it("returns null when no agent messages exist", async () => {
+    it("returns null when channel not found", async () => {
       mockSingle.mockResolvedValue({
         data: null,
         error: { message: "not found" },
       });
 
-      const sid = await getThreadSessionId(supabase, "thread-1");
+      const sid = await getChannelSessionId(supabase, TEST_CHANNEL_ID);
       expect(sid).toBeNull();
     });
 
-    it("returns null when session_id is null on the message row", async () => {
+    it("returns null when session_id is null on the channel", async () => {
       mockSingle.mockResolvedValue({
         data: { session_id: null },
         error: null,
       });
 
-      const sid = await getThreadSessionId(supabase, "thread-1");
+      const sid = await getChannelSessionId(supabase, TEST_CHANNEL_ID);
       expect(sid).toBeNull();
     });
   });
 
-  describe("createThread", () => {
-    it("inserts thread row and returns id", async () => {
-      mockSingle.mockResolvedValue({ data: { id: "thread-1" }, error: null });
-
-      const id = await createThread(supabase, TEST_CHANNEL_ID);
-
-      expect(mockFrom).toHaveBeenCalledWith("threads");
-      expect(mockInsert).toHaveBeenCalledWith({
-        channel_id: TEST_CHANNEL_ID,
-      });
-      expect(id).toBe("thread-1");
-    });
-
-    it("throws on DB error", async () => {
-      mockSingle.mockResolvedValue({ data: null, error: { message: "DB error" } });
-
-      await expect(
-        createThread(supabase, TEST_CHANNEL_ID)
-      ).rejects.toEqual({ message: "DB error" });
-    });
-  });
-
-  describe("updateThreadActivity", () => {
-    it("calls update on threads table", async () => {
+  describe("updateChannelSessionId", () => {
+    it("calls update on channels table", async () => {
       const mockEqResolved = vi.fn().mockResolvedValue({ error: null });
       mockUpdate.mockReturnValueOnce({ eq: mockEqResolved });
 
-      await updateThreadActivity(supabase, "thread-1");
+      await updateChannelSessionId(supabase, TEST_CHANNEL_ID, "sess-1");
 
-      expect(mockFrom).toHaveBeenCalledWith("threads");
-      expect(mockUpdate).toHaveBeenCalledWith(
-        expect.objectContaining({ last_activity_at: expect.any(String) })
-      );
-      expect(mockEqResolved).toHaveBeenCalledWith("id", "thread-1");
-    });
-
-    it("throws on DB error", async () => {
-      mockUpdate.mockReturnValueOnce({
-        eq: vi.fn().mockResolvedValue({ error: { message: "DB error" } }),
-      });
-
-      await expect(
-        updateThreadActivity(supabase, "thread-1")
-      ).rejects.toEqual({ message: "DB error" });
-    });
-  });
-
-  describe("updateMessageSessionId", () => {
-    it("calls update on messages table", async () => {
-      const mockEqResolved = vi.fn().mockResolvedValue({ error: null });
-      mockUpdate.mockReturnValueOnce({ eq: mockEqResolved });
-
-      await updateMessageSessionId(supabase, "msg-1", "sess-1");
-
-      expect(mockFrom).toHaveBeenCalledWith("messages");
+      expect(mockFrom).toHaveBeenCalledWith("channels");
       expect(mockUpdate).toHaveBeenCalledWith({ session_id: "sess-1" });
-      expect(mockEqResolved).toHaveBeenCalledWith("id", "msg-1");
+      expect(mockEqResolved).toHaveBeenCalledWith("id", TEST_CHANNEL_ID);
     });
 
     it("throws on DB error", async () => {
@@ -229,7 +182,7 @@ describe("db", () => {
       });
 
       await expect(
-        updateMessageSessionId(supabase, "msg-1", "sess-1")
+        updateChannelSessionId(supabase, TEST_CHANNEL_ID, "sess-1")
       ).rejects.toEqual({ message: "DB error" });
     });
   });
