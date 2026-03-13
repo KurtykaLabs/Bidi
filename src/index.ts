@@ -30,7 +30,7 @@ const supabase = createClient(supabaseUrl, supabaseKey, {
       if (status === "disconnected") {
         console.warn("[realtime] heartbeat disconnected, reconnecting...");
         supabase.realtime.connect();
-      } else if (status !== "ok") {
+      } else if (status !== "ok" && status !== "sent") {
         console.warn(`[realtime] heartbeat ${status}`);
       }
     },
