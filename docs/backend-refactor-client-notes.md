@@ -35,7 +35,6 @@ Four tables with proper relationships:
 |--------|------|-------------|
 | `id` | `uuid` (PK) | Auto-generated |
 | `channel_id` | `uuid` (FK → channels) | Parent channel |
-| `root_message_id` | `uuid` (FK → messages) | Message that started the thread |
 | `last_activity_at` | `timestamptz` | Updated on new messages |
 | `created_at` | `timestamptz` | Auto-generated |
 
@@ -124,15 +123,12 @@ supabase.channel(`channel:${channelId}`)
 
 ### Creating a thread
 
-A thread branches from an existing message (the root):
+Create a thread in a channel, then send messages with `thread_id`:
 
 ```typescript
 const { data: thread } = await supabase
   .from("threads")
-  .insert({
-    channel_id: channelId,
-    root_message_id: rootMessageId,
-  })
+  .insert({ channel_id: channelId })
   .select("id")
   .single();
 ```

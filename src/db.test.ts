@@ -168,12 +168,11 @@ describe("db", () => {
     it("inserts thread row and returns id", async () => {
       mockSingle.mockResolvedValue({ data: { id: "thread-1" }, error: null });
 
-      const id = await createThread(supabase, TEST_CHANNEL_ID, "msg-1");
+      const id = await createThread(supabase, TEST_CHANNEL_ID);
 
       expect(mockFrom).toHaveBeenCalledWith("threads");
       expect(mockInsert).toHaveBeenCalledWith({
         channel_id: TEST_CHANNEL_ID,
-        root_message_id: "msg-1",
       });
       expect(id).toBe("thread-1");
     });
@@ -182,7 +181,7 @@ describe("db", () => {
       mockSingle.mockResolvedValue({ data: null, error: { message: "DB error" } });
 
       await expect(
-        createThread(supabase, TEST_CHANNEL_ID, "msg-1")
+        createThread(supabase, TEST_CHANNEL_ID)
       ).rejects.toEqual({ message: "DB error" });
     });
   });

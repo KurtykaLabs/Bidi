@@ -8,7 +8,6 @@ CREATE TABLE channels (
 CREATE TABLE threads (
   id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   channel_id        uuid NOT NULL REFERENCES channels(id),
-  root_message_id   uuid NOT NULL,  -- FK added after messages table exists
   last_activity_at  timestamptz DEFAULT now(),
   created_at        timestamptz DEFAULT now()
 );
@@ -29,10 +28,6 @@ CREATE TABLE events (
   payload     jsonb DEFAULT '{}',
   created_at  timestamptz DEFAULT now()
 );
-
--- Deferred FK from threads.root_message_id to messages
-ALTER TABLE threads ADD CONSTRAINT fk_root_message
-  FOREIGN KEY (root_message_id) REFERENCES messages(id);
 
 CREATE INDEX idx_messages_channel ON messages(channel_id, created_at);
 CREATE INDEX idx_messages_thread ON messages(thread_id, created_at);

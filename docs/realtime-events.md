@@ -62,15 +62,12 @@ await supabase.from("events").insert({
 
 ### Creating a thread
 
-A thread is started from an existing message (the root):
+Create a thread in a channel:
 
 ```typescript
 const { data: thread } = await supabase
   .from("threads")
-  .insert({
-    channel_id: channelId,
-    root_message_id: rootMessageId,
-  })
+  .insert({ channel_id: channelId })
   .select("id")
   .single();
 ```
@@ -152,7 +149,6 @@ channels → threads → messages → events (persisted milestones)
 |--------|------|-------------|
 | `id` | `uuid` (PK) | Auto-generated |
 | `channel_id` | `uuid` (FK) | Parent channel |
-| `root_message_id` | `uuid` (FK) | Message that started the thread |
 | `last_activity_at` | `timestamptz` | Updated on new messages |
 | `created_at` | `timestamptz` | Auto-generated |
 

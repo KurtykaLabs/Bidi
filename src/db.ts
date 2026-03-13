@@ -72,12 +72,11 @@ export async function getThreadSessionId(
 
 export async function createThread(
   supabase: SupabaseClient,
-  channelId: string,
-  rootMessageId: string
+  channelId: string
 ): Promise<string> {
   const { data, error } = await supabase
     .from("threads")
-    .insert({ channel_id: channelId, root_message_id: rootMessageId })
+    .insert({ channel_id: channelId })
     .select("id")
     .single();
   if (error) throw error;
