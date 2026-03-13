@@ -14,6 +14,7 @@ export class RealtimeListener {
   private supabase: SupabaseClient;
   private listenerChannel: RealtimeChannel;
   private broadcastChannels = new Map<string, RealtimeChannel>();
+  private broadcastReady = new Map<string, Promise<void>>();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
   private reconnectAttempts = 0;
@@ -64,13 +65,21 @@ export class RealtimeListener {
     let channel = this.broadcastChannels.get(channelId);
     if (!channel) {
       channel = this.supabase.channel(`channel:${channelId}`);
-      channel.subscribe();
+      const ready = new Promise<void>((resolve) => {
+        channel!.subscribe((status) => {
+          if (status === "SUBSCRIBED") resolve();
+        });
+      });
+      this.broadcastReady.set(channelId, ready);
       this.broadcastChannels.set(channelId, channel);
     }
-    channel.send({
-      type: "broadcast",
-      event: "agent_event",
-      payload: { ...event, message_id: messageId },
+    const ch = channel;
+    this.broadcastReady.get(channelId)!.then(() => {
+      ch.send({
+        type: "broadcast",
+        event: "agent_event",
+        payload: { ...event, message_id: messageId },
+      });
     });
   }
 
@@ -86,6 +95,7 @@ export class RealtimeListener {
       this.supabase.removeChannel(channel);
     }
     this.broadcastChannels.clear();
+    this.broadcastReady.clear();
   }
 
   private async catchUpMissedMessages(onMessage: (row: MessageRow) => void | Promise<void>): Promise<void> {

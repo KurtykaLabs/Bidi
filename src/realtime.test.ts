@@ -110,8 +110,9 @@ describe("RealtimeListener", () => {
   });
 
   describe("broadcastAgentEvent", () => {
-    it("lazy-creates a broadcast channel on first call", () => {
+    it("lazy-creates a broadcast channel on first call", async () => {
       listener.broadcastAgentEvent("ch-1", { type: "text_delta", text: "Hi" }, "msg-1");
+      await Promise.resolve();
 
       expect(mockChannelFactory).toHaveBeenCalledWith("channel:ch-1");
       expect(mockSubscribe).toHaveBeenCalled();
@@ -122,9 +123,10 @@ describe("RealtimeListener", () => {
       });
     });
 
-    it("reuses existing broadcast channel on subsequent calls", () => {
+    it("reuses existing broadcast channel on subsequent calls", async () => {
       listener.broadcastAgentEvent("ch-1", { type: "text_delta", text: "Hi" }, "msg-1");
       listener.broadcastAgentEvent("ch-1", { type: "text_delta", text: "there" }, "msg-1");
+      await Promise.resolve();
 
       // channel factory called once for "messages:all" in constructor + once for "channel:ch-1"
       const channelCalls = mockChannelFactory.mock.calls.filter(
@@ -142,12 +144,13 @@ describe("RealtimeListener", () => {
       expect(mockChannelFactory).toHaveBeenCalledWith("channel:ch-2");
     });
 
-    it("spreads all event fields into payload", () => {
+    it("spreads all event fields into payload", async () => {
       listener.broadcastAgentEvent(
         "ch-1",
         { type: "tool_use_start", name: "read_file", id: "tool-1" },
         "msg-1"
       );
+      await Promise.resolve();
 
       expect(mockSend).toHaveBeenCalledWith({
         type: "broadcast",
