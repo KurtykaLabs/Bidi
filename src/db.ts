@@ -109,10 +109,10 @@ export async function updateMessageSessionId(
 export async function getHumanMessagesSince(
   supabase: SupabaseClient,
   since: string
-): Promise<Array<{ id: string; role: string; channel_id: string; thread_id: string | null }>> {
+): Promise<Array<{ id: string; role: string; channel_id: string; thread_id: string | null; created_at: string }>> {
   const { data, error } = await supabase
     .from("messages")
-    .select("id, role, channel_id, thread_id")
+    .select("id, role, channel_id, thread_id, created_at")
     .eq("role", "human")
     .gt("created_at", since)
     .order("created_at", { ascending: true });
@@ -127,9 +127,10 @@ export async function getChannelSummary(
 ): Promise<string | null> {
   const { data, error } = await supabase
     .from("messages")
-    .select("role, events(payload)")
+    .select("role, events!inner(type, payload)")
     .eq("channel_id", channelId)
     .is("thread_id", null)
+    .in("events.type", ["text", "assistant_message"])
     .order("created_at", { ascending: false })
     .limit(limit);
 
@@ -137,8 +138,11 @@ export async function getChannelSummary(
 
   const lines: string[] = [];
   for (const msg of data.reverse()) {
-    const events = msg.events as Array<{ payload: { text?: string } }>;
-    const text = events?.[0]?.payload?.text;
+    const events = msg.events as Array<{ type: string; payload: { text?: string } }>;
+    const textEvent = events?.find(
+      (e) => e.type === "text" || e.type === "assistant_message"
+    );
+    const text = textEvent?.payload?.text;
     if (text) {
       lines.push(`${msg.role}: ${text}`);
     }

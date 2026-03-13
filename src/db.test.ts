@@ -235,89 +235,84 @@ describe("db", () => {
   });
 
   describe("getChannelSummary", () => {
-    it("returns formatted summary of recent channel messages", async () => {
-      const mockIsNull = vi.fn(() => ({
-        order: vi.fn(() => ({
-          limit: vi.fn().mockResolvedValue({
-            data: [
-              { role: "agent", events: [{ payload: { text: "Hi there!" } }] },
-              { role: "human", events: [{ payload: { text: "Hello" } }] },
-            ],
-            error: null,
-          }),
-        })),
-      }));
+    function mockSummaryChain(resolvedValue: any) {
+      const mockLimitFn = vi.fn().mockResolvedValue(resolvedValue);
+      const mockOrderFn = vi.fn(() => ({ limit: mockLimitFn }));
+      const mockInFn = vi.fn(() => ({ order: mockOrderFn }));
+      const mockIsNull = vi.fn(() => ({ in: mockInFn }));
       const mockEqChannel = vi.fn(() => ({ is: mockIsNull }));
       const mockSelectSummary = vi.fn(() => ({ eq: mockEqChannel }));
       mockFrom.mockReturnValueOnce({ select: mockSelectSummary });
+      return { mockSelectSummary, mockLimitFn };
+    }
+
+    it("returns formatted summary of recent channel messages", async () => {
+      const { mockSelectSummary } = mockSummaryChain({
+        data: [
+          { role: "agent", events: [{ type: "assistant_message", payload: { text: "Hi there!" } }] },
+          { role: "human", events: [{ type: "text", payload: { text: "Hello" } }] },
+        ],
+        error: null,
+      });
 
       const summary = await getChannelSummary(supabase, TEST_CHANNEL_ID);
 
       expect(mockFrom).toHaveBeenCalledWith("messages");
-      expect(mockSelectSummary).toHaveBeenCalledWith("role, events(payload)");
+      expect(mockSelectSummary).toHaveBeenCalledWith("role, events!inner(type, payload)");
       expect(summary).toBe("human: Hello\nagent: Hi there!");
     });
 
     it("returns null on DB error", async () => {
-      const mockIsNull = vi.fn(() => ({
-        order: vi.fn(() => ({
-          limit: vi.fn().mockResolvedValue({ data: null, error: { message: "DB error" } }),
-        })),
-      }));
-      const mockEqChannel = vi.fn(() => ({ is: mockIsNull }));
-      const mockSelectSummary = vi.fn(() => ({ eq: mockEqChannel }));
-      mockFrom.mockReturnValueOnce({ select: mockSelectSummary });
+      mockSummaryChain({ data: null, error: { message: "DB error" } });
 
       const summary = await getChannelSummary(supabase, TEST_CHANNEL_ID);
       expect(summary).toBeNull();
     });
 
     it("returns null when no messages exist", async () => {
-      const mockIsNull = vi.fn(() => ({
-        order: vi.fn(() => ({
-          limit: vi.fn().mockResolvedValue({ data: [], error: null }),
-        })),
-      }));
-      const mockEqChannel = vi.fn(() => ({ is: mockIsNull }));
-      const mockSelectSummary = vi.fn(() => ({ eq: mockEqChannel }));
-      mockFrom.mockReturnValueOnce({ select: mockSelectSummary });
+      mockSummaryChain({ data: [], error: null });
 
       const summary = await getChannelSummary(supabase, TEST_CHANNEL_ID);
       expect(summary).toBeNull();
     });
 
     it("skips messages with no text in events", async () => {
-      const mockIsNull = vi.fn(() => ({
-        order: vi.fn(() => ({
-          limit: vi.fn().mockResolvedValue({
-            data: [
-              { role: "human", events: [{ payload: { text: "Follow up" } }] },
-              { role: "agent", events: [] },
-              { role: "human", events: [{ payload: { text: "Hello" } }] },
-            ],
-            error: null,
-          }),
-        })),
-      }));
-      const mockEqChannel = vi.fn(() => ({ is: mockIsNull }));
-      const mockSelectSummary = vi.fn(() => ({ eq: mockEqChannel }));
-      mockFrom.mockReturnValueOnce({ select: mockSelectSummary });
+      mockSummaryChain({
+        data: [
+          { role: "human", events: [{ type: "text", payload: { text: "Follow up" } }] },
+          { role: "agent", events: [] },
+          { role: "human", events: [{ type: "text", payload: { text: "Hello" } }] },
+        ],
+        error: null,
+      });
 
       const summary = await getChannelSummary(supabase, TEST_CHANNEL_ID);
       expect(summary).toBe("human: Hello\nhuman: Follow up");
     });
 
     it("respects custom limit parameter", async () => {
-      const mockLimitFn = vi.fn().mockResolvedValue({ data: [], error: null });
-      const mockIsNull = vi.fn(() => ({
-        order: vi.fn(() => ({ limit: mockLimitFn })),
-      }));
-      const mockEqChannel = vi.fn(() => ({ is: mockIsNull }));
-      const mockSelectSummary = vi.fn(() => ({ eq: mockEqChannel }));
-      mockFrom.mockReturnValueOnce({ select: mockSelectSummary });
+      const { mockLimitFn } = mockSummaryChain({ data: [], error: null });
 
       await getChannelSummary(supabase, TEST_CHANNEL_ID, 5);
       expect(mockLimitFn).toHaveBeenCalledWith(5);
+    });
+
+    it("finds text event among multiple event types", async () => {
+      mockSummaryChain({
+        data: [
+          {
+            role: "agent",
+            events: [
+              { type: "tool_use_start", payload: { name: "bash" } },
+              { type: "assistant_message", payload: { text: "Done!" } },
+            ],
+          },
+        ],
+        error: null,
+      });
+
+      const summary = await getChannelSummary(supabase, TEST_CHANNEL_ID);
+      expect(summary).toBe("agent: Done!");
     });
   });
 });

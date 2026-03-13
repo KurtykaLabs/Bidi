@@ -7,6 +7,7 @@ export interface MessageRow {
   role: string;
   channel_id: string;
   thread_id: string | null;
+  created_at: string;
 }
 
 export class RealtimeListener {
@@ -25,7 +26,7 @@ export class RealtimeListener {
     this.listenerChannel = this.supabase.channel("messages:all");
   }
 
-  subscribe(onMessage: (row: MessageRow) => void): void {
+  subscribe(onMessage: (row: MessageRow) => void | Promise<void>): void {
     this.disposed = false;
     this.listenerChannel
       .on(
@@ -37,9 +38,11 @@ export class RealtimeListener {
         },
         (payload) => {
           const row = payload.new as MessageRow;
-          this.lastSeenAt = new Date().toISOString();
+          if (row.created_at) this.lastSeenAt = row.created_at;
           if (row.role !== "human") return;
-          onMessage(row);
+          Promise.resolve(onMessage(row)).catch((err) => {
+            console.error(`[realtime] onMessage error: ${err.message}`);
+          });
         }
       )
       .subscribe((status, err) => {
@@ -78,19 +81,22 @@ export class RealtimeListener {
       this.reconnectTimer = null;
     }
     this.supabase.removeChannel(this.listenerChannel);
+    this.listenerChannel = this.supabase.channel("messages:all");
     for (const channel of this.broadcastChannels.values()) {
       this.supabase.removeChannel(channel);
     }
     this.broadcastChannels.clear();
   }
 
-  private async catchUpMissedMessages(onMessage: (row: MessageRow) => void): Promise<void> {
+  private async catchUpMissedMessages(onMessage: (row: MessageRow) => void | Promise<void>): Promise<void> {
     try {
       const missed = await getHumanMessagesSince(this.supabase, this.lastSeenAt);
       if (missed.length > 0) {
         console.log(`[realtime] catching up on ${missed.length} missed message(s)`);
         for (const row of missed) {
-          onMessage(row);
+          await Promise.resolve(onMessage(row)).catch((err) => {
+            console.error(`[realtime] catch-up onMessage error: ${err.message}`);
+          });
         }
       }
     } catch (err: any) {
@@ -98,7 +104,7 @@ export class RealtimeListener {
     }
   }
 
-  private reconnect(onMessage: (row: MessageRow) => void): void {
+  private reconnect(onMessage: (row: MessageRow) => void | Promise<void>): void {
     if (this.reconnectTimer) return;
     const delay = Math.min(
       RealtimeListener.BASE_RECONNECT_DELAY * 2 ** this.reconnectAttempts,

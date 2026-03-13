@@ -30,18 +30,23 @@ channels → threads → messages → events (persisted milestones)
 - Human messages have a single `text` event; agent messages have multiple events
 - Threads link back to a root message; `session_id` on agent messages enables conversation continuity
 
-**`src/index.ts`** — Entry point. Queries all channels on startup, creates a `Chat` instance per channel. On human message INSERT, fetches text event, creates agent message, streams response via Claude Agent SDK `query()`, persists milestone events, and updates session/thread metadata.
+**`src/index.ts`** — Entry point. Creates a `RealtimeListener`, subscribes to message INSERTs. On human message, fetches text event (with retry), creates agent message, streams response via Claude Agent SDK `query()`, persists milestone events, and updates session/thread metadata.
 
-**`src/chat.ts`** — `Chat` class wrapping Supabase realtime, scoped to a single channel. Handles:
-- Channel subscription with postgres_changes listener on `messages` table filtered by `channel_id`
+**`src/realtime.ts`** — `RealtimeListener` class wrapping Supabase Realtime. Handles:
+- Global subscription with postgres_changes listener on `messages` table (no channel filter)
 - `broadcastAgentEvent()` — broadcasts `AgentEvent` with `message_id` on `channel:{id}` channel
-- `createMessage()` — inserts message row, returns id
-- `persistEvent()` — inserts event row under a message
+- Exponential backoff reconnection (3s base, 60s max) with `disposed` flag to prevent reconnects after unsubscribe
+- Catch-up query on reconnect to recover messages missed during disconnect window
+- Uses `removeChannel()` for clean channel teardown (avoids stale channel reuse)
+
+**`src/db.ts`** — Database query helpers:
+- `createMessage()` / `persistEvent()` — insert message and event rows
 - `getMessageText()` — queries text event for a message
 - `getThreadSessionId()` — looks up most recent agent session_id in a thread
 - `createThread()` / `updateThreadActivity()` — thread lifecycle helpers
 - `updateMessageSessionId()` — sets session_id on agent messages after stream completes
-- Exponential backoff reconnection (3s base, 60s max) with `disposed` flag to prevent reconnects after unsubscribe
+- `getHumanMessagesSince()` — catch-up query for reconnect recovery
+- `getChannelSummary()` — fetches recent channel messages for thread context
 
 **`src/agent.ts`** — Stream processing for Claude Agent SDK responses:
 - `AgentEvent` — discriminated union of all event types (text_delta, thinking, tool_use, result, etc.)

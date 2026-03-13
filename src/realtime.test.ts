@@ -24,6 +24,10 @@ vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(),
 }));
 
+vi.mock("./db.js", () => ({
+  getHumanMessagesSince: vi.fn().mockResolvedValue([]),
+}));
+
 import { RealtimeListener } from "./realtime.js";
 
 const mockSupabase = { channel: mockChannelFactory, removeChannel: mockRemoveChannel } as any;
@@ -62,7 +66,7 @@ describe("RealtimeListener", () => {
 
       const postgresCallback = mockOn.mock.calls[0][2];
       postgresCallback({
-        new: { id: "msg-1", role: "human", channel_id: "ch-1", thread_id: null },
+        new: { id: "msg-1", role: "human", channel_id: "ch-1", thread_id: null, created_at: "2026-01-01T00:00:00Z" },
       });
 
       expect(onMessage).toHaveBeenCalledWith({
@@ -70,6 +74,7 @@ describe("RealtimeListener", () => {
         role: "human",
         channel_id: "ch-1",
         thread_id: null,
+        created_at: "2026-01-01T00:00:00Z",
       });
     });
 
@@ -79,7 +84,7 @@ describe("RealtimeListener", () => {
 
       const postgresCallback = mockOn.mock.calls[0][2];
       postgresCallback({
-        new: { id: "msg-1", role: "agent", channel_id: "ch-1", thread_id: null },
+        new: { id: "msg-1", role: "agent", channel_id: "ch-1", thread_id: null, created_at: "2026-01-01T00:00:00Z" },
       });
 
       expect(onMessage).not.toHaveBeenCalled();
@@ -91,7 +96,7 @@ describe("RealtimeListener", () => {
 
       const postgresCallback = mockOn.mock.calls[0][2];
       postgresCallback({
-        new: { id: "msg-2", role: "human", channel_id: "ch-1", thread_id: "thread-1" },
+        new: { id: "msg-2", role: "human", channel_id: "ch-1", thread_id: "thread-1", created_at: "2026-01-01T00:00:01Z" },
       });
 
       expect(onMessage).toHaveBeenCalledWith({
@@ -99,6 +104,7 @@ describe("RealtimeListener", () => {
         role: "human",
         channel_id: "ch-1",
         thread_id: "thread-1",
+        created_at: "2026-01-01T00:00:01Z",
       });
     });
   });
@@ -275,9 +281,11 @@ describe("RealtimeListener", () => {
   });
 
   describe("unsubscribe", () => {
-    it("removes listener channel via removeChannel", () => {
+    it("removes listener channel via removeChannel and reinitializes", () => {
       listener.unsubscribe();
       expect(mockRemoveChannel).toHaveBeenCalledWith(mockChannel);
+      // Should create a fresh channel so resubscribe works
+      expect(mockChannelFactory).toHaveBeenCalledTimes(2);
     });
 
     it("cleans up broadcast channels via removeChannel", () => {
@@ -299,7 +307,8 @@ describe("RealtimeListener", () => {
 
       vi.advanceTimersByTime(5000);
 
-      expect(mockChannelFactory).toHaveBeenCalledTimes(1);
+      // 1 from constructor + 1 from unsubscribe reinit, no extra from reconnect
+      expect(mockChannelFactory).toHaveBeenCalledTimes(2);
     });
 
     it("does not reconnect when CLOSED fires as side-effect of unsubscribe", () => {
@@ -312,7 +321,8 @@ describe("RealtimeListener", () => {
 
       vi.advanceTimersByTime(5000);
 
-      expect(mockChannelFactory).toHaveBeenCalledTimes(1);
+      // 1 from constructor + 1 from unsubscribe reinit, no extra from reconnect
+      expect(mockChannelFactory).toHaveBeenCalledTimes(2);
     });
   });
 });

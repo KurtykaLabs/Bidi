@@ -182,7 +182,7 @@ channels → threads → messages → events (persisted milestones)
 { "type": "text", "payload": { "text": "Hello agent" } }
 
 // Agent text event (final)
-{ "type": "text", "payload": { "text": "Here's my response..." } }
+{ "type": "assistant_message", "payload": { "text": "Here's my response..." } }
 
 // Tool use start
 { "type": "tool_use_start", "payload": { "name": "bash", "id": "tool_123" } }

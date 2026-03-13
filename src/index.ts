@@ -113,7 +113,12 @@ async function getAgentResponse(msg: HumanMessage) {
 }
 
 listener.subscribe(async (row: MessageRow) => {
-  const text = await getMessageText(supabase, row.id);
+  let text: string | null = null;
+  for (let i = 0; i < 3; i++) {
+    text = await getMessageText(supabase, row.id);
+    if (text?.trim()) break;
+    await new Promise((r) => setTimeout(r, 200 * (i + 1)));
+  }
   if (!text?.trim()) return;
 
   const msg: HumanMessage = {
