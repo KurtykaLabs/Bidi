@@ -107,6 +107,20 @@ export async function updateMessageSessionId(
   if (error) throw error;
 }
 
+export async function getHumanMessagesSince(
+  supabase: SupabaseClient,
+  since: string
+): Promise<Array<{ id: string; role: string; channel_id: string; thread_id: string | null }>> {
+  const { data, error } = await supabase
+    .from("messages")
+    .select("id, role, channel_id, thread_id")
+    .eq("role", "human")
+    .gt("created_at", since)
+    .order("created_at", { ascending: true });
+  if (error) throw error;
+  return data ?? [];
+}
+
 export async function getChannelSummary(
   supabase: SupabaseClient,
   channelId: string,

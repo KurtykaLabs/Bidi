@@ -26,6 +26,7 @@ const supabaseUrl = process.env.SUPABASE_URL!;
 const supabaseKey = process.env.SUPABASE_ANON_KEY!;
 const supabase = createClient(supabaseUrl, supabaseKey, {
   realtime: {
+    heartbeatIntervalMs: 5_000,
     heartbeatCallback: (status: string) => {
       if (status === "disconnected") {
         console.warn("[realtime] heartbeat disconnected, reconnecting...");

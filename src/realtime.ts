@@ -1,5 +1,6 @@
 import type { SupabaseClient, RealtimeChannel } from "@supabase/supabase-js";
 import type { AgentEvent } from "./agent.js";
+import { getHumanMessagesSince } from "./db.js";
 
 export interface MessageRow {
   id: string;
@@ -15,6 +16,7 @@ export class RealtimeListener {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
   private reconnectAttempts = 0;
+  private lastSeenAt: string = new Date().toISOString();
   private static readonly MAX_RECONNECT_DELAY = 60_000;
   private static readonly BASE_RECONNECT_DELAY = 3_000;
 
@@ -35,14 +37,19 @@ export class RealtimeListener {
         },
         (payload) => {
           const row = payload.new as MessageRow;
+          this.lastSeenAt = new Date().toISOString();
           if (row.role !== "human") return;
           onMessage(row);
         }
       )
       .subscribe((status, err) => {
         if (status === "SUBSCRIBED") {
+          const isReconnect = this.reconnectAttempts > 0;
           this.reconnectAttempts = 0;
           console.log("Realtime listener connected");
+          if (isReconnect) {
+            this.catchUpMissedMessages(onMessage);
+          }
         } else if (status === "TIMED_OUT" || status === "CHANNEL_ERROR" || status === "CLOSED") {
           console.error(`Realtime listener ${status}`, err);
           if (!this.disposed) this.reconnect(onMessage);
@@ -75,6 +82,20 @@ export class RealtimeListener {
       this.supabase.removeChannel(channel);
     }
     this.broadcastChannels.clear();
+  }
+
+  private async catchUpMissedMessages(onMessage: (row: MessageRow) => void): Promise<void> {
+    try {
+      const missed = await getHumanMessagesSince(this.supabase, this.lastSeenAt);
+      if (missed.length > 0) {
+        console.log(`[realtime] catching up on ${missed.length} missed message(s)`);
+        for (const row of missed) {
+          onMessage(row);
+        }
+      }
+    } catch (err: any) {
+      console.error(`[realtime] catch-up query failed: ${err.message}`);
+    }
   }
 
   private reconnect(onMessage: (row: MessageRow) => void): void {
