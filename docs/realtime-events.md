@@ -2,32 +2,37 @@
 
 Client reference for consuming Bidi agent events via Supabase Realtime.
 
-## Channel
+## Channels
 
-All events flow through a single Supabase channel: `"chat"`.
+Conversations are organized into channels. Each channel has its own Supabase Realtime channel named `channel:{channelId}` and a single Claude session (`session_id`).
 
 ### Subscribing to agent events (broadcast)
 
 ```typescript
-const channel = supabase.channel("chat");
+const channel = supabase.channel(`channel:${channelId}`);
 
 channel
   .on("broadcast", { event: "agent_event" }, ({ payload }) => {
-    const event: AgentEvent = payload;
-    // event.type determines the shape — see Event Types below
+    // payload.type determines the shape — see Event Types below
+    // payload.message_id links to the parent message
   })
   .subscribe();
 ```
 
-### Subscribing to persisted events (postgres_changes)
+### Subscribing to new messages (postgres_changes)
 
 ```typescript
 channel
   .on(
     "postgres_changes",
-    { event: "INSERT", schema: "public", table: "agent_events" },
+    {
+      event: "INSERT",
+      schema: "public",
+      table: "messages",
+      filter: `channel_id=eq.${channelId}`,
+    },
     ({ new: row }) => {
-      // row.type, row.payload, row.created_at
+      // row.id, row.channel_id, row.parent_message_id, row.role
     }
   )
   .subscribe();
@@ -35,20 +40,47 @@ channel
 
 ### Sending a human message
 
-Insert into `human_events` — the agent subscribes to this table:
+Create a message row, then insert a text event under it:
 
 ```typescript
-await supabase.from("human_events").insert({
-  type: "message",
+const { data: msg } = await supabase
+  .from("messages")
+  .insert({
+    channel_id: channelId,
+    role: "human",
+    parent_message_id: parentMessageId ?? undefined, // optional
+  })
+  .select("id")
+  .single();
+
+await supabase.from("events").insert({
+  message_id: msg.id,
+  type: "text",
   payload: { text: "Hello agent" },
 });
+```
+
+### Replying to a message
+
+To create a reply, set `parent_message_id` to the message you're replying to:
+
+```typescript
+const { data: reply } = await supabase
+  .from("messages")
+  .insert({
+    channel_id: channelId,
+    role: "human",
+    parent_message_id: originalMessageId,
+  })
+  .select("id")
+  .single();
 ```
 
 ---
 
 ## Event Types
 
-Every broadcast payload has the shape `{ type: string, ...fields }`. The `type` field determines which additional fields are present.
+Every broadcast payload has the shape `{ type: string, message_id: string, ...fields }`. The `type` field determines which additional fields are present.
 
 ### Text streaming
 
@@ -87,76 +119,83 @@ Every broadcast payload has the shape `{ type: string, ...fields }`. The `type` 
 
 ---
 
-## Event Sequencing
-
-A typical agent response produces events in this order:
+## Data Model
 
 ```
-session_id
-thinking_start
-thinking_delta (repeated)
-thinking_stop
-text_delta (repeated)
-tool_use_start
-tool_use_delta (repeated)
-tool_use_stop
-tool_progress (repeated, during execution)
-tool_result
-text_delta (repeated, after tool)
-assistant_message
-result
+channels → messages → events (persisted milestones)
+    ↑          ↑          ↳ streaming deltas broadcast-only
+    |          ↳ parent_message_id (self-referencing for replies)
+    ↳ session_id (one Claude conversation per channel)
 ```
 
-Not all events appear in every response. A simple text reply may only produce:
-
-```
-session_id
-text_delta (repeated)
-assistant_message
-result
-```
-
----
-
-## Persistence
-
-Only milestone events are inserted into the `agent_events` table:
-
-- `assistant_message`
-- `tool_use_start`
-- `tool_result`
-- `tool_use_summary`
-- `result`
-
-All other events are broadcast-only (ephemeral). Clients that connect mid-stream can query `agent_events` for history and rely on broadcasts for live updates.
+- Messages can be top-level in a channel (no parent) or replies to another message
+- Replying to a message sets `parent_message_id` to the original message's ID
+- Messages are containers — no `text` column; content lives in child events
+- Human messages contain a single `text` event
+- Agent messages contain multiple events (text, tool uses, results)
 
 ---
 
 ## Database Tables
 
-### `human_events`
+### `channels`
 
 | Column | Type | Description |
 |--------|------|-------------|
 | `id` | `uuid` (PK) | Auto-generated |
-| `type` | `text` | Event type (e.g. `"message"`) |
-| `payload` | `jsonb` | Event data (e.g. `{ "text": "Hello" }`) |
+| `name` | `text` | Channel name |
+| `session_id` | `text` (nullable) | Claude SDK session ID |
 | `created_at` | `timestamptz` | Auto-generated |
 
-### `agent_events`
+### `messages`
 
 | Column | Type | Description |
 |--------|------|-------------|
 | `id` | `uuid` (PK) | Auto-generated |
+| `channel_id` | `uuid` (FK) | Parent channel |
+| `parent_message_id` | `uuid` (FK, nullable) | Parent message (null = top-level) |
+| `role` | `text` | `'human'` or `'agent'` |
+| `created_at` | `timestamptz` | Auto-generated |
+
+### `events`
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | `uuid` (PK) | Auto-generated |
+| `message_id` | `uuid` (FK) | Parent message |
 | `type` | `text` | Event type |
 | `payload` | `jsonb` | Event data |
 | `created_at` | `timestamptz` | Auto-generated |
 
 ---
 
+## Event Payload Examples
+
+```jsonc
+// Human text event
+{ "type": "text", "payload": { "text": "Hello agent" } }
+
+// Agent text event (final)
+{ "type": "assistant_message", "payload": { "text": "Here's my response..." } }
+
+// Tool use start
+{ "type": "tool_use_start", "payload": { "name": "bash", "id": "tool_123" } }
+
+// Tool result
+{ "type": "tool_result", "payload": { "tool_use_id": "tool_123", "content": "..." } }
+
+// Tool use summary
+{ "type": "tool_use_summary", "payload": { "summary": "Ran bash command..." } }
+
+// Result (stream complete)
+{ "type": "result", "payload": { "duration_ms": 5432 } }
+```
+
+---
+
 ## Broadcast Payload Shape
 
-All broadcasts use event name `"agent_event"` on the `"chat"` channel:
+All broadcasts use event name `"agent_event"` on the `channel:{channelId}` channel:
 
 ```json
 {
@@ -165,9 +204,9 @@ All broadcasts use event name `"agent_event"` on the `"chat"` channel:
   "payload": {
     "type": "text_delta",
     "text": "Hello",
-    "sender": "agent"
+    "message_id": "msg-uuid"
   }
 }
 ```
 
-The `sender` field is always `"agent"` for agent-originated events.
+The `message_id` field links the broadcast event to its parent agent message.

@@ -4,27 +4,49 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Bidi is a real-time agent that listens for human messages via Supabase Realtime and auto-responds using the Claude Agent SDK. All SDK events (thinking, tool use, text deltas, results) are broadcast through a single `agent_event` channel, with milestone events persisted to a database.
+Bidi is a real-time agent that listens for human messages via Supabase Realtime and auto-responds using the Claude Agent SDK. Conversations are organized into channels (one Claude session per channel). Messages can be replies via `parent_message_id`. All SDK events (thinking, tool use, text deltas, results) are broadcast per-channel, with milestone events persisted as rows in an `events` table under parent messages.
 
 ## Commands
 
 ```bash
 npm test              # Run tests (vitest)
 npm run build         # Compile TypeScript to dist/
-npm start             # Run agent (listens for human_events, responds via agent_events)
+npm start             # Run agent (subscribes to all channels, responds to human messages)
 ```
 
 ## Architecture
 
 Single-package TypeScript project using ESM modules (`"type": "module"`).
 
-**`src/index.ts`** — Entry point. Subscribes to `human_events` table, auto-responds via Claude Agent SDK `query()`. Each SDK event is broadcast and milestone events are persisted.
+### Data model
 
-**`src/chat.ts`** — `Chat` class wrapping Supabase realtime. Handles:
-- Channel subscription with postgres_changes listener on `human_events` table
-- `broadcastAgentEvent()` — broadcasts `AgentEvent` on `"agent_event"` channel
-- `persistAgentEvent()` — inserts milestone events (`assistant_message`, `tool_use_start`, `tool_use_summary`, `tool_result`, `result`) to `agent_events` table
+```
+channels → messages → events (persisted milestones)
+    ↑          ↑          ↳ streaming deltas broadcast-only
+    |          ↳ parent_message_id (self-referencing for replies)
+    ↳ session_id (one Claude conversation per channel)
+```
+
+- Messages are containers (no `text` column) — content lives in child `events` rows
+- Human messages have a single `text` event; agent messages have multiple events
+- `session_id` lives on channels for conversation continuity
+- Replies use `parent_message_id` (self-referencing FK on messages)
+
+**`src/index.ts`** — Entry point. Creates a `RealtimeListener`, subscribes to message INSERTs. On human message, fetches text event (with retry), creates agent message, streams response via Claude Agent SDK `query()`, persists milestone events, and updates channel session.
+
+**`src/realtime.ts`** — `RealtimeListener` class wrapping Supabase Realtime. Handles:
+- Global subscription with postgres_changes listener on `messages` table (no channel filter)
+- `broadcastAgentEvent()` — broadcasts `AgentEvent` with `message_id` on `channel:{id}` channel
 - Exponential backoff reconnection (3s base, 60s max) with `disposed` flag to prevent reconnects after unsubscribe
+- Catch-up query on reconnect to recover messages missed during disconnect window
+- Uses `removeChannel()` for clean channel teardown (avoids stale channel reuse)
+
+**`src/db.ts`** — Database query helpers:
+- `createMessage()` / `persistEvent()` — insert message and event rows
+- `getMessageText()` — queries text event for a message
+- `getChannelSessionId()` / `updateChannelSessionId()` — read/write session_id on channels
+- `getHumanMessagesSince()` — catch-up query for reconnect recovery
+- `getChannelSummary()` — fetches recent top-level channel messages for context
 
 **`src/agent.ts`** — Stream processing for Claude Agent SDK responses:
 - `AgentEvent` — discriminated union of all event types (text_delta, thinking, tool_use, result, etc.)
@@ -34,7 +56,10 @@ Single-package TypeScript project using ESM modules (`"type": "module"`).
 
 **`docs/realtime-events.md`** — Client spec documenting all event types, payloads, and Supabase subscription patterns.
 
-**`supabase/migrations/001_event_tables.sql`** — Creates `human_events` and `agent_events` tables.
+**`supabase/migrations/`** — Database migrations:
+- `001_event_tables.sql` — Original `human_events` and `agent_events` tables (superseded)
+- `002_channels_threads_messages.sql` — Creates `channels`, `threads`, `messages`, `events` tables; drops old tables
+- `003_simplify_data_model.sql` — Drops `threads` table, moves `session_id` to channels, replaces `thread_id` with `parent_message_id`
 
 ## Testing
 
