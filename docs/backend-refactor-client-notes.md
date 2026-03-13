@@ -1,25 +1,19 @@
 # Backend Refactor: Client Notes
 
-Summary of recent backend changes for client implementation.
+Summary of backend changes for client implementation.
 
-## Data model overhaul
+## Data model
 
 The old `human_events` and `agent_events` tables are gone. They've been replaced with a normalized schema:
 
 ```
-channels → threads → messages → events
+channels → messages → events
+    ↑          ↑          ↳ streaming deltas broadcast-only
+    |          ↳ parent_message_id (self-referencing for replies)
+    ↳ session_id (one Claude conversation per channel)
 ```
 
-### Old model
-
-Two flat tables, no concept of channels or threads:
-
-- `human_events` — rows with `type`, `payload`, `created_at`
-- `agent_events` — rows with `type`, `payload`, `created_at`
-
-### New model
-
-Four tables with proper relationships:
+### Tables
 
 **`channels`** — top-level conversation containers
 
@@ -27,15 +21,7 @@ Four tables with proper relationships:
 |--------|------|-------------|
 | `id` | `uuid` (PK) | Auto-generated |
 | `name` | `text` | Channel name |
-| `created_at` | `timestamptz` | Auto-generated |
-
-**`threads`** — branched conversations off a root message
-
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | `uuid` (PK) | Auto-generated |
-| `channel_id` | `uuid` (FK → channels) | Parent channel |
-| `last_activity_at` | `timestamptz` | Updated on new messages |
+| `session_id` | `text` (nullable) | Claude SDK session ID for conversation continuity |
 | `created_at` | `timestamptz` | Auto-generated |
 
 **`messages`** — containers for content, no `text` column
@@ -44,9 +30,8 @@ Four tables with proper relationships:
 |--------|------|-------------|
 | `id` | `uuid` (PK) | Auto-generated |
 | `channel_id` | `uuid` (FK → channels) | Parent channel |
-| `thread_id` | `uuid` (FK → threads, nullable) | Thread membership (null = top-level) |
+| `parent_message_id` | `uuid` (FK → messages, nullable) | Parent message (null = top-level) |
 | `role` | `text` | `'human'` or `'agent'` |
-| `session_id` | `text` (nullable) | Claude session ID for conversation continuity |
 | `created_at` | `timestamptz` | Auto-generated |
 
 **`events`** — actual content lives here, under messages
@@ -65,27 +50,29 @@ Key concept: **messages are containers**. A human message has a single `text` ev
 
 ### Sending a human message
 
-Two inserts: a message row, then a text event under it.
+Use the `send_message` RPC:
 
 ```typescript
-const { data: msg } = await supabase
-  .from("messages")
-  .insert({
-    channel_id: channelId,
-    role: "human",
-    thread_id: threadId ?? undefined, // omit for top-level messages
-  })
-  .select("id")
-  .single();
-
-await supabase.from("events").insert({
-  message_id: msg.id,
-  type: "text",
-  payload: { text: "Hello agent" },
+const { data: messageId } = await supabase.rpc("send_message", {
+  p_channel_id: channelId,
+  p_text: "Hello agent",
+  p_parent_message_id: parentMessageId ?? undefined, // optional
 });
 ```
 
 The backend picks up the message INSERT via realtime and auto-responds.
+
+### Replying to a message
+
+Set `p_parent_message_id` to the message you're replying to:
+
+```typescript
+const { data: messageId } = await supabase.rpc("send_message", {
+  p_channel_id: channelId,
+  p_text: "Follow up question",
+  p_parent_message_id: originalMessageId,
+});
+```
 
 ### Subscribing to agent events (broadcast)
 
@@ -115,25 +102,11 @@ supabase.channel(`channel:${channelId}`)
       filter: `channel_id=eq.${channelId}`,
     },
     ({ new: row }) => {
-      // row.id, row.channel_id, row.thread_id, row.role, row.session_id
+      // row.id, row.channel_id, row.parent_message_id, row.role
     }
   )
   .subscribe();
 ```
-
-### Creating a thread
-
-Create a thread in a channel, then send messages with `thread_id`:
-
-```typescript
-const { data: thread } = await supabase
-  .from("threads")
-  .insert({ channel_id: channelId })
-  .select("id")
-  .single();
-```
-
-Subsequent messages in the thread set `thread_id` to this value. The backend automatically provides channel context to new threads and resumes existing Claude sessions for ongoing threads.
 
 ### Loading message history
 
@@ -142,7 +115,7 @@ Messages are containers — join through events to get content:
 ```typescript
 const { data } = await supabase
   .from("messages")
-  .select("id, role, thread_id, created_at, events(type, payload, created_at)")
+  .select("id, role, parent_message_id, created_at, events(type, payload, created_at)")
   .eq("channel_id", channelId)
   .order("created_at", { ascending: true });
 ```
@@ -196,6 +169,6 @@ Every broadcast payload has the shape `{ type: string, message_id: string, ...fi
 
 2. **New channels work immediately.** The backend listens globally — no restart needed when a new channel is created.
 
-3. **Threads get context automatically.** When a thread starts (no prior session), the backend fetches recent channel messages and includes them as context for the agent. Subsequent messages in the same thread resume the Claude session.
+3. **Replies get context automatically.** When a reply starts in a channel with no prior session, the backend fetches recent channel messages and includes them as context for the agent. Subsequent messages in the same channel resume the Claude session.
 
-4. **`session_id` on messages.** After an agent finishes responding, its message row gets a `session_id`. This is used internally for session resumption — clients don't need to manage it, but it's available if you want to display session continuity.
+4. **`session_id` on channels.** After an agent finishes responding, the channel gets a `session_id`. This is used internally for session resumption — clients don't need to manage it.

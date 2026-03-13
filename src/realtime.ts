@@ -38,8 +38,8 @@ export class RealtimeListener {
         },
         (payload) => {
           const row = payload.new as MessageRow;
-          if (row.created_at) this.lastSeenAt = row.created_at;
           if (row.role !== "human") return;
+          if (row.created_at) this.lastSeenAt = row.created_at;
           Promise.resolve(onMessage(row)).catch((err) => {
             console.error(`[realtime] onMessage error: ${err.message}`);
           });
@@ -98,6 +98,8 @@ export class RealtimeListener {
             console.error(`[realtime] catch-up onMessage error: ${err.message}`);
           });
         }
+        const last = missed[missed.length - 1];
+        if (last.created_at) this.lastSeenAt = last.created_at;
       }
     } catch (err: any) {
       console.error(`[realtime] catch-up query failed: ${err.message}`);

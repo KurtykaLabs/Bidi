@@ -54,7 +54,7 @@ async function getAgentResponse(msg: HumanMessage) {
       supabase,
       msg.channelId,
       "agent",
-      msg.parentMessageId
+      msg.id
     );
 
     let prompt = msg.text;
