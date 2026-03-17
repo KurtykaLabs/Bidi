@@ -262,7 +262,7 @@ describe("RealtimeListener", () => {
       expect(mockChannelFactory).toHaveBeenCalledTimes(countBefore + 1);
     });
 
-    it("resets backoff after successful reconnect", () => {
+    it("resets backoff after 30s of stable connection", () => {
       mockSubscribe.mockImplementation((cb?: any) => {
         subscribeCallback = cb;
         return mockChannel;
@@ -276,9 +276,36 @@ describe("RealtimeListener", () => {
       expect(mockChannelFactory).toHaveBeenCalledTimes(2);
 
       subscribeCallback!("SUBSCRIBED");
+      // Advance past the 30s stability threshold so reconnectAttempts resets
+      vi.advanceTimersByTime(30_000);
 
       subscribeCallback!("CHANNEL_ERROR");
       vi.advanceTimersByTime(3000);
+      expect(mockChannelFactory).toHaveBeenCalledTimes(3);
+    });
+
+    it("does not reset backoff before 30s stability threshold", () => {
+      mockSubscribe.mockImplementation((cb?: any) => {
+        subscribeCallback = cb;
+        return mockChannel;
+      });
+
+      listener.subscribe(vi.fn());
+      subscribeCallback!("SUBSCRIBED");
+
+      subscribeCallback!("CHANNEL_ERROR");
+      vi.advanceTimersByTime(3000);
+      expect(mockChannelFactory).toHaveBeenCalledTimes(2);
+
+      subscribeCallback!("SUBSCRIBED");
+      // Only advance 10s — not enough to reset backoff
+      vi.advanceTimersByTime(10_000);
+
+      // Error before stability timer fires — backoff should still be elevated (6s)
+      subscribeCallback!("CHANNEL_ERROR");
+      vi.advanceTimersByTime(5999);
+      expect(mockChannelFactory).toHaveBeenCalledTimes(2);
+      vi.advanceTimersByTime(1);
       expect(mockChannelFactory).toHaveBeenCalledTimes(3);
     });
   });
