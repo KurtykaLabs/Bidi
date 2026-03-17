@@ -25,6 +25,7 @@ const supabaseUrl = process.env.SUPABASE_URL!;
 const supabaseKey = process.env.SUPABASE_ANON_KEY!;
 const supabase = createClient(supabaseUrl, supabaseKey, {
   realtime: {
+    worker: false,
     heartbeatIntervalMs: 5_000,
     heartbeatCallback: (status: string) => {
       if (status === "disconnected") {
