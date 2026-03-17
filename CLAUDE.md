@@ -65,6 +65,11 @@ channels → messages → events (persisted milestones)
 
 Tests live next to source files (`*.test.ts`). Vitest with module-level mocks for Supabase. Uses `vi.useFakeTimers()` for reconnection timing tests. Test files are excluded from `tsc` build via tsconfig.
 
+## Skills
+
+- Before writing or modifying Supabase queries, schema, migrations, or RLS policies, use the `supabase-postgres-best-practices` skill for Postgres optimization guidance.
+- Before writing or modifying code that uses the Claude API or Anthropic SDK, use the `claude-api` skill.
+
 ## Environment
 
 Requires `.env` with `SUPABASE_URL` and `SUPABASE_ANON_KEY`. Copy from `.env.example`.
