@@ -1,7 +1,7 @@
 import type { SupabaseClient, RealtimeChannel } from "@supabase/supabase-js";
 import type { AgentEvent } from "./agent.js";
 import { getHumanMessagesSince } from "./db.js";
-import { appendFileSync } from "node:fs";
+import { appendFile } from "node:fs";
 
 export interface MessageRow {
   id: string;
@@ -33,16 +33,32 @@ export class RealtimeListener {
     return new Date().toISOString().replace("T", " ").slice(0, 19);
   }
 
+  private formatError(err: unknown): string {
+    if (err instanceof Error) {
+      return err.stack ?? `${err.name}: ${err.message}`;
+    }
+    try {
+      return JSON.stringify(err);
+    } catch {
+      return String(err);
+    }
+  }
+
   private log(msg: string): void {
     const line = `[${this.ts()}] ${msg}`;
     console.log(line);
-    try { appendFileSync(RealtimeListener.LOG_FILE, line + "\n"); } catch {}
+    appendFile(RealtimeListener.LOG_FILE, line + "\n", () => {});
   }
 
   private logError(msg: string, err?: unknown): void {
     const line = `[${this.ts()}] ${msg}`;
-    console.error(line, err);
-    try { appendFileSync(RealtimeListener.LOG_FILE, line + (err ? ` ${err}` : "") + "\n"); } catch {}
+    if (err !== undefined) {
+      console.error(line, err);
+    } else {
+      console.error(line);
+    }
+    const errStr = err !== undefined ? ` ${this.formatError(err)}` : "";
+    appendFile(RealtimeListener.LOG_FILE, line + errStr + "\n", () => {});
   }
 
   constructor(supabase: SupabaseClient) {
@@ -83,11 +99,13 @@ export class RealtimeListener {
           // Only reset backoff after connection is stable for 30s
           if (this.stabilityTimer) clearTimeout(this.stabilityTimer);
           this.stabilityTimer = setTimeout(() => {
+            this.stabilityTimer = null;
             if (this.reconnectAttempts > 0) {
               this.log(`Connection stable for ${RealtimeListener.STABLE_CONNECTION_MS / 1000}s, resetting backoff (was attempt ${this.reconnectAttempts})`);
             }
             this.reconnectAttempts = 0;
           }, RealtimeListener.STABLE_CONNECTION_MS);
+          this.stabilityTimer.unref();
           if (isReconnect) {
             this.catchUpMissedMessages(onMessage);
           }
@@ -100,9 +118,7 @@ export class RealtimeListener {
           const uptime = this.connectedAt
             ? ((this.disconnectedAt - this.connectedAt) / 1000).toFixed(1)
             : null;
-          const errDetail = err != null
-            ? (typeof err === "object" ? JSON.stringify(err) : String(err))
-            : "no error detail";
+          const errDetail = err != null ? this.formatError(err) : "no error detail";
           this.logError(
             `Realtime listener ${status} (uptime: ${uptime ?? "?"}s) [${errDetail}]`
           );
