@@ -46,14 +46,16 @@ async function generateChannelName(messageText: string): Promise<string> {
   const nameQuery = query({
     prompt: `Generate a brief channel name (2-5 words) that captures the topic of this message. Use lowercase with underscores, no spaces. Example: "project_setup_help". Reply with only the name, nothing else.\n\nMessage: ${messageText}`,
     options: {
-      model: "claude-haiku-4-5-latest",
+      model: "haiku",
       permissionMode: "bypassPermissions",
       allowDangerouslySkipPermissions: true,
     },
   });
 
   const result = await processAgentStream(nameQuery, () => {});
-  return result.text.trim().toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
+  const name = result.text.trim().toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
+  if (!name || name.length > 50) throw new Error("Generated name invalid");
+  return name;
 }
 
 async function getAgentResponse(msg: HumanMessage) {
