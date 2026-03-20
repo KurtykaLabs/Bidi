@@ -84,7 +84,7 @@ async function getAgentResponse(msg: HumanMessage) {
       msg.id
     );
 
-    listener.broadcastAgentEvent(msg.channelId, { type: "thinking_start" }, agentMessageId);
+    listener.broadcastAgentEvent(msg.channelId, { type: "ack" }, agentMessageId);
 
     let prompt = msg.text;
     if (msg.parentMessageId && !sessionId) {
