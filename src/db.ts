@@ -67,6 +67,18 @@ export async function getChannelSessionId(
   return data.session_id ?? null;
 }
 
+export async function updateChannelName(
+  supabase: SupabaseClient,
+  channelId: string,
+  name: string
+): Promise<void> {
+  const { error } = await supabase
+    .from("channels")
+    .update({ name })
+    .eq("id", channelId);
+  if (error) throw error;
+}
+
 export async function updateChannelSessionId(
   supabase: SupabaseClient,
   channelId: string,
