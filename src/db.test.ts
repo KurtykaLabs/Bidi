@@ -22,6 +22,7 @@ import {
   persistEvent,
   getMessageText,
   getChannelSessionId,
+  updateChannelName,
   updateChannelSessionId,
   getChannelSummary,
 } from "./db.js";
@@ -161,6 +162,44 @@ describe("db", () => {
 
       const sid = await getChannelSessionId(supabase, TEST_CHANNEL_ID);
       expect(sid).toBeNull();
+    });
+  });
+
+  describe("updateChannelName", () => {
+    it("returns true when name was updated from default", async () => {
+      const mockSelectFn = vi.fn().mockResolvedValue({ data: [{ id: TEST_CHANNEL_ID }], error: null });
+      const mockEqName = vi.fn(() => ({ select: mockSelectFn }));
+      const mockEqId = vi.fn(() => ({ eq: mockEqName }));
+      mockUpdate.mockReturnValueOnce({ eq: mockEqId });
+
+      const result = await updateChannelName(supabase, TEST_CHANNEL_ID, "project_discussion");
+
+      expect(mockFrom).toHaveBeenCalledWith("channels");
+      expect(mockUpdate).toHaveBeenCalledWith({ name: "project_discussion" });
+      expect(mockEqId).toHaveBeenCalledWith("id", TEST_CHANNEL_ID);
+      expect(mockEqName).toHaveBeenCalledWith("name", "new_channel");
+      expect(result).toBe(true);
+    });
+
+    it("returns false when name was already set", async () => {
+      const mockSelectFn = vi.fn().mockResolvedValue({ data: [], error: null });
+      const mockEqName = vi.fn(() => ({ select: mockSelectFn }));
+      const mockEqId = vi.fn(() => ({ eq: mockEqName }));
+      mockUpdate.mockReturnValueOnce({ eq: mockEqId });
+
+      const result = await updateChannelName(supabase, TEST_CHANNEL_ID, "project_discussion");
+      expect(result).toBe(false);
+    });
+
+    it("throws on DB error", async () => {
+      const mockSelectFn = vi.fn().mockResolvedValue({ error: { message: "DB error" } });
+      const mockEqName = vi.fn(() => ({ select: mockSelectFn }));
+      const mockEqId = vi.fn(() => ({ eq: mockEqName }));
+      mockUpdate.mockReturnValueOnce({ eq: mockEqId });
+
+      await expect(
+        updateChannelName(supabase, TEST_CHANNEL_ID, "project_discussion")
+      ).rejects.toEqual({ message: "DB error" });
     });
   });
 

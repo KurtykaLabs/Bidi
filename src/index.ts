@@ -8,6 +8,7 @@ import {
   getMessageText,
   getChannelSessionId,
   getChannelSummary,
+  updateChannelName,
   updateChannelSessionId,
   type HumanMessage,
 } from "./db.js";
@@ -41,6 +42,22 @@ const listener = new RealtimeListener(supabase);
 
 const responding = new Set<string>();
 
+async function generateChannelName(messageText: string): Promise<string> {
+  const nameQuery = query({
+    prompt: `Generate a brief channel name (2-5 words) that captures the topic of this message. Use lowercase with underscores, no spaces. Example: "project_setup_help". Reply with only the name, nothing else.\n\nMessage: ${messageText}`,
+    options: {
+      model: "haiku",
+      permissionMode: "bypassPermissions",
+      allowDangerouslySkipPermissions: true,
+    },
+  });
+
+  const result = await processAgentStream(nameQuery, () => {});
+  const name = result.text.trim().toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
+  if (!name || name.length > 50) throw new Error("Generated name invalid");
+  return name;
+}
+
 async function getAgentResponse(msg: HumanMessage) {
   const key = msg.parentMessageId ?? msg.id;
   if (responding.has(key)) return;
@@ -51,12 +68,25 @@ async function getAgentResponse(msg: HumanMessage) {
   try {
     const sessionId = await getChannelSessionId(supabase, msg.channelId);
 
+    if (!sessionId) {
+      generateChannelName(msg.text)
+        .then(async (name) => {
+          const updated = await updateChannelName(supabase, msg.channelId, name);
+          if (updated) {
+            listener.broadcastChannelEvent(msg.channelId, "channel_renamed", { name });
+          }
+        })
+        .catch((err) => console.error(`[error] Channel name: ${err.message}`));
+    }
+
     const agentMessageId = await createMessage(
       supabase,
       msg.channelId,
       "agent",
       msg.id
     );
+
+    listener.broadcastAgentEvent(msg.channelId, { type: "ack" }, agentMessageId);
 
     let prompt = msg.text;
     if (msg.parentMessageId && !sessionId) {

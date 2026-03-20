@@ -67,6 +67,21 @@ export async function getChannelSessionId(
   return data.session_id ?? null;
 }
 
+export async function updateChannelName(
+  supabase: SupabaseClient,
+  channelId: string,
+  name: string
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from("channels")
+    .update({ name })
+    .eq("id", channelId)
+    .eq("name", "new_channel")
+    .select("id");
+  if (error) throw error;
+  return Array.isArray(data) && data.length > 0;
+}
+
 export async function updateChannelSessionId(
   supabase: SupabaseClient,
   channelId: string,

@@ -13,6 +13,7 @@ export type AgentEvent =
   | { type: "result"; session_id?: string; duration_ms?: number }
   | { type: "system"; message: string; subtype?: string }
   | { type: "session_id"; id: string }
+  | { type: "ack" }
   | { type: "unknown"; raw: any };
 
 export interface AgentStreamResult {

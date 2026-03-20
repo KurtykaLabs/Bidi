@@ -156,12 +156,29 @@ Every broadcast payload has the shape `{ type: string, message_id: string, ...fi
 
 | Type | Fields | Persisted | Description |
 |------|--------|-----------|-------------|
+| `ack` | _(none)_ | No | Agent received message, starting work |
 | `session_id` | `id` | No | Session ID for continuity |
 | `result` | `session_id?`, `duration_ms?` | Yes | Stream completed |
 | `system` | `message`, `subtype?` | No | System-level message |
 | `unknown` | `raw` | No | Unrecognized event (passthrough) |
 
 "Persisted" means the event is saved as a row in the `events` table under the agent message. Non-persisted events are broadcast-only (streaming deltas, thinking, etc.).
+
+### Channel events
+
+Channel-level events use event name `"channel_event"` on the same `channel:{channelId}` channel:
+
+```typescript
+channel.on("broadcast", { event: "channel_event" }, ({ payload }) => {
+  if (payload.type === "channel_renamed") {
+    // payload.name is the new channel name
+  }
+});
+```
+
+| Type | Fields | Description |
+|------|--------|-------------|
+| `channel_renamed` | `name` | Channel was auto-named from first message |
 
 ## Things to know
 

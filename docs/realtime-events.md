@@ -112,10 +112,25 @@ Every broadcast payload has the shape `{ type: string, message_id: string, ...fi
 
 | Type | Fields | Persisted | Description |
 |------|--------|-----------|-------------|
+| `ack` | _(none)_ | No | Agent received message, starting work |
 | `session_id` | `id: string` | No | Session ID for conversation continuity |
 | `result` | `session_id?: string`, `duration_ms?: number` | Yes | Stream completed |
 | `system` | `message: string`, `subtype?: string` | No | System-level message |
 | `unknown` | `raw: any` | No | Unrecognized SDK event (passthrough) |
+
+### Channel events
+
+Channel-level events are broadcast on the same `channel:{channelId}` channel using event name `"channel_event"`.
+
+```typescript
+channel.on("broadcast", { event: "channel_event" }, ({ payload }) => {
+  // payload.type determines the event
+});
+```
+
+| Type | Fields | Description |
+|------|--------|-------------|
+| `channel_renamed` | `name: string` | Channel was auto-named based on first message |
 
 ---
 
