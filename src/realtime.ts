@@ -68,7 +68,8 @@ export class RealtimeListener {
 
   subscribe(onMessage: (row: MessageRow) => void | Promise<void>): void {
     this.disposed = false;
-    this.listenerChannel
+    const currentChannel = this.listenerChannel;
+    currentChannel
       .on(
         "postgres_changes",
         {
@@ -77,6 +78,7 @@ export class RealtimeListener {
           table: "messages",
         },
         (payload) => {
+          if (currentChannel !== this.listenerChannel) return;
           const row = payload.new as MessageRow;
           if (row.role !== "human") return;
           if (row.created_at) this.lastSeenAt = row.created_at;
@@ -86,6 +88,7 @@ export class RealtimeListener {
         }
       )
       .subscribe((status, err) => {
+        if (currentChannel !== this.listenerChannel) return;
         if (status === "SUBSCRIBED") {
           const isReconnect = this.reconnectAttempts > 0;
           this.connectedAt = Date.now();
@@ -177,8 +180,9 @@ export class RealtimeListener {
       clearTimeout(this.stabilityTimer);
       this.stabilityTimer = null;
     }
-    this.supabase.removeChannel(this.listenerChannel);
+    const oldChannel = this.listenerChannel;
     this.listenerChannel = this.supabase.channel("messages:all");
+    this.supabase.removeChannel(oldChannel);
     for (const channel of this.broadcastChannels.values()) {
       this.supabase.removeChannel(channel);
     }
@@ -214,8 +218,9 @@ export class RealtimeListener {
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.log(`Attempting to reconnect (attempt ${this.reconnectAttempts})...`);
-      this.supabase.removeChannel(this.listenerChannel);
+      const oldChannel = this.listenerChannel;
       this.listenerChannel = this.supabase.channel("messages:all");
+      this.supabase.removeChannel(oldChannel);
       this.subscribe(onMessage);
     }, delay);
   }

@@ -29,10 +29,7 @@ const supabase = createClient(supabaseUrl, supabaseKey, {
     worker: false,
     heartbeatIntervalMs: 5_000,
     heartbeatCallback: (status: string) => {
-      if (status === "disconnected") {
-        console.warn("[realtime] heartbeat disconnected, reconnecting...");
-        supabase.realtime.connect();
-      } else if (status !== "ok" && status !== "sent") {
+      if (status !== "ok" && status !== "sent") {
         console.warn(`[realtime] heartbeat ${status}`);
       }
     },
