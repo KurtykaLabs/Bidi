@@ -84,6 +84,8 @@ async function getAgentResponse(msg: HumanMessage) {
       msg.id
     );
 
+    listener.broadcastAgentEvent(msg.channelId, { type: "thinking_start" }, agentMessageId);
+
     let prompt = msg.text;
     if (msg.parentMessageId && !sessionId) {
       const summary = await getChannelSummary(supabase, msg.channelId);
