@@ -166,21 +166,36 @@ describe("db", () => {
   });
 
   describe("updateChannelName", () => {
-    it("calls update on channels table with name", async () => {
-      const mockEqResolved = vi.fn().mockResolvedValue({ error: null });
-      mockUpdate.mockReturnValueOnce({ eq: mockEqResolved });
+    it("returns true when name was updated from default", async () => {
+      const mockSelectFn = vi.fn().mockResolvedValue({ data: [{ id: TEST_CHANNEL_ID }], error: null });
+      const mockEqName = vi.fn(() => ({ select: mockSelectFn }));
+      const mockEqId = vi.fn(() => ({ eq: mockEqName }));
+      mockUpdate.mockReturnValueOnce({ eq: mockEqId });
 
-      await updateChannelName(supabase, TEST_CHANNEL_ID, "project_discussion");
+      const result = await updateChannelName(supabase, TEST_CHANNEL_ID, "project_discussion");
 
       expect(mockFrom).toHaveBeenCalledWith("channels");
       expect(mockUpdate).toHaveBeenCalledWith({ name: "project_discussion" });
-      expect(mockEqResolved).toHaveBeenCalledWith("id", TEST_CHANNEL_ID);
+      expect(mockEqId).toHaveBeenCalledWith("id", TEST_CHANNEL_ID);
+      expect(mockEqName).toHaveBeenCalledWith("name", "new_channel");
+      expect(result).toBe(true);
+    });
+
+    it("returns false when name was already set", async () => {
+      const mockSelectFn = vi.fn().mockResolvedValue({ data: [], error: null });
+      const mockEqName = vi.fn(() => ({ select: mockSelectFn }));
+      const mockEqId = vi.fn(() => ({ eq: mockEqName }));
+      mockUpdate.mockReturnValueOnce({ eq: mockEqId });
+
+      const result = await updateChannelName(supabase, TEST_CHANNEL_ID, "project_discussion");
+      expect(result).toBe(false);
     });
 
     it("throws on DB error", async () => {
-      mockUpdate.mockReturnValueOnce({
-        eq: vi.fn().mockResolvedValue({ error: { message: "DB error" } }),
-      });
+      const mockSelectFn = vi.fn().mockResolvedValue({ error: { message: "DB error" } });
+      const mockEqName = vi.fn(() => ({ select: mockSelectFn }));
+      const mockEqId = vi.fn(() => ({ eq: mockEqName }));
+      mockUpdate.mockReturnValueOnce({ eq: mockEqId });
 
       await expect(
         updateChannelName(supabase, TEST_CHANNEL_ID, "project_discussion")

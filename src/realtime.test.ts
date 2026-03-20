@@ -165,6 +165,30 @@ describe("RealtimeListener", () => {
     });
   });
 
+  describe("broadcastChannelEvent", () => {
+    it("sends channel_event with correct payload shape", async () => {
+      listener.broadcastChannelEvent("ch-1", "channel_renamed", { name: "test_channel" });
+      await Promise.resolve();
+
+      expect(mockSend).toHaveBeenCalledWith({
+        type: "broadcast",
+        event: "channel_event",
+        payload: { type: "channel_renamed", name: "test_channel" },
+      });
+    });
+
+    it("reuses existing broadcast channel", async () => {
+      listener.broadcastAgentEvent("ch-1", { type: "text_delta", text: "Hi" }, "msg-1");
+      listener.broadcastChannelEvent("ch-1", "channel_renamed", { name: "test_channel" });
+      await Promise.resolve();
+
+      const channelCalls = mockChannelFactory.mock.calls.filter(
+        (c: any) => c[0] === "channel:ch-1"
+      );
+      expect(channelCalls).toHaveLength(1);
+    });
+  });
+
   describe("reconnect", () => {
     beforeEach(() => {
       vi.useFakeTimers();

@@ -70,9 +70,11 @@ async function getAgentResponse(msg: HumanMessage) {
 
     if (!sessionId) {
       generateChannelName(msg.text)
-        .then((name) => {
-          updateChannelName(supabase, msg.channelId, name);
-          listener.broadcastChannelEvent(msg.channelId, "channel_renamed", { name });
+        .then(async (name) => {
+          const updated = await updateChannelName(supabase, msg.channelId, name);
+          if (updated) {
+            listener.broadcastChannelEvent(msg.channelId, "channel_renamed", { name });
+          }
         })
         .catch((err) => console.error(`[error] Channel name: ${err.message}`));
     }
