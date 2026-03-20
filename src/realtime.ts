@@ -127,7 +127,7 @@ export class RealtimeListener {
       });
   }
 
-  broadcastAgentEvent(channelId: string, event: AgentEvent, messageId: string): void {
+  private ensureBroadcastChannel(channelId: string): RealtimeChannel {
     let channel = this.broadcastChannels.get(channelId);
     if (!channel) {
       channel = this.supabase.channel(`channel:${channelId}`);
@@ -142,7 +142,22 @@ export class RealtimeListener {
       this.broadcastReady.set(channelId, ready);
       this.broadcastChannels.set(channelId, channel);
     }
-    const ch = channel;
+    return channel;
+  }
+
+  broadcastChannelEvent(channelId: string, event: string, payload: Record<string, unknown>): void {
+    const ch = this.ensureBroadcastChannel(channelId);
+    this.broadcastReady.get(channelId)!.then(() => {
+      ch.send({
+        type: "broadcast",
+        event: "channel_event",
+        payload: { type: event, ...payload },
+      });
+    });
+  }
+
+  broadcastAgentEvent(channelId: string, event: AgentEvent, messageId: string): void {
+    const ch = this.ensureBroadcastChannel(channelId);
     this.broadcastReady.get(channelId)!.then(() => {
       ch.send({
         type: "broadcast",
