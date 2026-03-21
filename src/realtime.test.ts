@@ -332,6 +332,55 @@ describe("RealtimeListener", () => {
       vi.advanceTimersByTime(1);
       expect(mockChannelFactory).toHaveBeenCalledTimes(3);
     });
+
+    it("does not cascade reconnects when removeChannel triggers CLOSED on old channel", () => {
+      const channels: any[] = [];
+      const callbacks = new Map<object, (status: string, err?: Error) => void>();
+
+      const localFactory = vi.fn(() => {
+        const ch = {
+          on: vi.fn(() => ch),
+          subscribe: vi.fn((cb?: any) => {
+            if (cb) callbacks.set(ch, cb);
+            return ch;
+          }),
+          send: vi.fn(),
+          unsubscribe: vi.fn(),
+        };
+        channels.push(ch);
+        return ch;
+      });
+
+      const localRemove = vi.fn((channel: any) => {
+        const cb = callbacks.get(channel);
+        if (cb) cb("CLOSED");
+      });
+
+      const localSupabase = { channel: localFactory, removeChannel: localRemove } as any;
+      const freshListener = new RealtimeListener(localSupabase);
+      const onMessage = vi.fn();
+      freshListener.subscribe(onMessage);
+
+      // Trigger connected state
+      const ch0cb = callbacks.get(channels[0])!;
+      ch0cb("SUBSCRIBED");
+
+      // Simulate disconnect
+      ch0cb("CHANNEL_ERROR");
+
+      // Fire reconnect timer — removeChannel will trigger CLOSED on old channel
+      vi.advanceTimersByTime(3000);
+
+      // New channel should be subscribed
+      const ch1cb = callbacks.get(channels[1])!;
+      ch1cb("SUBSCRIBED");
+
+      // No cascading reconnect timer should tear down the new channel
+      vi.advanceTimersByTime(60_000);
+
+      // Only 2 channels: constructor + 1 reconnect (no cascade)
+      expect(channels.length).toBe(2);
+    });
   });
 
   describe("unsubscribe", () => {
