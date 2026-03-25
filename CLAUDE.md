@@ -39,7 +39,9 @@ channels → messages → events (persisted milestones)
 - `broadcastAgentEvent()` — broadcasts `AgentEvent` with `message_id` on `channel:{id}` channel
 - Exponential backoff reconnection (3s base, 60s max) with `disposed` flag to prevent reconnects after unsubscribe
 - Catch-up query on reconnect to recover messages missed during disconnect window
-- Uses `removeChannel()` for clean channel teardown (avoids stale channel reuse)
+- Stale-channel guard pattern: `subscribe()` captures `currentChannel` in a closure and bails if `this.listenerChannel` has changed since
+
+**Supabase channel deduplication gotcha:** `supabase.channel(topic)` returns the *existing* channel instance if one with that topic already exists (see `RealtimeClient.channel()` in `@supabase/realtime-js`). Calling `.subscribe()` on a reused channel throws `"tried to subscribe multiple times"` because `joinedOnce` is never reset. Additionally, `RealtimeClient._remove(channel)` filters by topic name (`c.topic !== channel.topic`), so removing an old channel will also remove a new channel if they share the same topic. **Always use a unique topic for reconnection** (e.g. `` `messages:all:${Date.now()}` ``) to guarantee a fresh channel instance.
 
 **`src/db.ts`** — Database query helpers:
 - `createMessage()` / `persistEvent()` — insert message and event rows

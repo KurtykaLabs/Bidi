@@ -26,7 +26,6 @@ export class RealtimeListener {
   private static readonly MAX_RECONNECT_DELAY = 60_000;
   private static readonly BASE_RECONNECT_DELAY = 3_000;
   private static readonly STABLE_CONNECTION_MS = 30_000;
-
   private static readonly LOG_FILE = "bidi.log";
 
   private ts(): string {
@@ -215,12 +214,20 @@ export class RealtimeListener {
       RealtimeListener.MAX_RECONNECT_DELAY
     );
     this.reconnectAttempts++;
+    this.log(`Reconnecting in ${(delay / 1000).toFixed(0)}s (attempt ${this.reconnectAttempts})...`);
+
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      this.log(`Attempting to reconnect (attempt ${this.reconnectAttempts})...`);
+
+      // Swap to a fresh channel FIRST — supabase.channel() deduplicates by
+      // topic name, so we use a unique suffix to get a genuinely new instance.
+      // Reassigning before removeChannel() ensures the stale-channel guard
+      // in subscribe() catches any CLOSED callbacks from the old channel.
       const oldChannel = this.listenerChannel;
-      this.listenerChannel = this.supabase.channel("messages:all");
+      this.listenerChannel = this.supabase.channel(`messages:all:${Date.now()}`);
       this.supabase.removeChannel(oldChannel);
+
+      this.log(`Reconnect attempt ${this.reconnectAttempts}...`);
       this.subscribe(onMessage);
     }, delay);
   }
