@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { RealtimeListener, type MessageRow } from "./realtime.js";
@@ -104,11 +105,12 @@ async function getAgentResponse(msg: HumanMessage) {
     });
 
     const onEvent = (event: AgentEvent) => {
-      listener.broadcastAgentEvent(msg.channelId, event, agentMessageId);
+      const eventId = MILESTONE_TYPES.has(event.type) ? randomUUID() : undefined;
+      listener.broadcastAgentEvent(msg.channelId, event, agentMessageId, eventId);
 
-      if (MILESTONE_TYPES.has(event.type)) {
+      if (eventId) {
         const { type, ...payload } = event;
-        persistEvent(supabase, agentMessageId, type, payload).catch((err) => {
+        persistEvent(supabase, eventId, agentMessageId, type, payload).catch((err) => {
           console.error(`[error] Persist: ${err.message}`);
         });
       }
