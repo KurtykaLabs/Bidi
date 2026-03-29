@@ -80,10 +80,11 @@ describe("db", () => {
       const plainInsert = vi.fn().mockResolvedValue({ error: null });
       mockFrom.mockReturnValueOnce({ insert: plainInsert });
 
-      await persistEvent(supabase, "msg-1", "text", { text: "Hello" });
+      await persistEvent(supabase, "evt-1", "msg-1", "text", { text: "Hello" });
 
       expect(mockFrom).toHaveBeenCalledWith("events");
       expect(plainInsert).toHaveBeenCalledWith({
+        id: "evt-1",
         message_id: "msg-1",
         type: "text",
         payload: { text: "Hello" },
@@ -95,7 +96,7 @@ describe("db", () => {
       mockFrom.mockReturnValueOnce({ insert: plainInsert });
 
       await expect(
-        persistEvent(supabase, "msg-1", "text", { text: "Hello" })
+        persistEvent(supabase, "evt-1", "msg-1", "text", { text: "Hello" })
       ).rejects.toEqual({ message: "DB error" });
     });
   });

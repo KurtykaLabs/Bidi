@@ -28,13 +28,14 @@ export async function createMessage(
 
 export async function persistEvent(
   supabase: SupabaseClient,
+  eventId: string,
   messageId: string,
   type: string,
   payload: Record<string, unknown>
 ): Promise<void> {
   const { error } = await supabase
     .from("events")
-    .insert({ message_id: messageId, type, payload });
+    .insert({ id: eventId, message_id: messageId, type, payload });
   if (error) throw error;
 }
 

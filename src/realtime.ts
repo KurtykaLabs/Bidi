@@ -159,13 +159,13 @@ export class RealtimeListener {
     });
   }
 
-  broadcastAgentEvent(channelId: string, event: AgentEvent, messageId: string): void {
+  broadcastAgentEvent(channelId: string, event: AgentEvent, messageId: string, eventId?: string): void {
     const ch = this.ensureBroadcastChannel(channelId);
     this.broadcastReady.get(channelId)!.then(() => {
       ch.send({
         type: "broadcast",
         event: "agent_event",
-        payload: { ...event, message_id: messageId },
+        payload: { ...event, message_id: messageId, ...(eventId && { event_id: eventId }) },
       });
     });
   }
