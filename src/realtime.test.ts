@@ -333,6 +333,26 @@ describe("RealtimeListener", () => {
       expect(mockChannelFactory).toHaveBeenCalledTimes(3);
     });
 
+    it("uses a unique topic on reconnect to avoid Supabase channel dedup", () => {
+      mockSubscribe.mockImplementation((cb?: any) => {
+        subscribeCallback = cb;
+        return mockChannel;
+      });
+
+      listener.subscribe(vi.fn());
+      subscribeCallback!("SUBSCRIBED");
+      subscribeCallback!("CHANNEL_ERROR");
+
+      vi.advanceTimersByTime(3000);
+
+      const topics = mockChannelFactory.mock.calls.map((c: any) => c[0]);
+      const constructorTopic = topics[0];
+      const reconnectTopic = topics[1];
+
+      expect(reconnectTopic).not.toBe(constructorTopic);
+      expect(reconnectTopic).toMatch(/^messages:all:\d+$/);
+    });
+
     it("does not cascade reconnects when removeChannel triggers CLOSED on old channel", () => {
       const channels: any[] = [];
       const callbacks = new Map<object, (status: string, err?: Error) => void>();
@@ -389,6 +409,22 @@ describe("RealtimeListener", () => {
       expect(mockRemoveChannel).toHaveBeenCalledWith(mockChannel);
       // Should create a fresh channel so resubscribe works
       expect(mockChannelFactory).toHaveBeenCalledTimes(2);
+    });
+
+    it("removes old channel before creating new one with unique topic", () => {
+      const callOrder: string[] = [];
+      mockRemoveChannel.mockImplementation(() => callOrder.push("remove"));
+      mockChannelFactory.mockImplementation((topic: string) => {
+        if (callOrder.length > 0 || topic !== "messages:all") {
+          callOrder.push(`create:${topic}`);
+        }
+        return mockChannel;
+      });
+
+      listener.unsubscribe();
+
+      expect(callOrder[0]).toBe("remove");
+      expect(callOrder[1]).toMatch(/^create:messages:all:\d+$/);
     });
 
     it("cleans up broadcast channels via removeChannel", () => {

@@ -180,8 +180,8 @@ export class RealtimeListener {
       this.stabilityTimer = null;
     }
     const oldChannel = this.listenerChannel;
-    this.listenerChannel = this.supabase.channel("messages:all");
     this.supabase.removeChannel(oldChannel);
+    this.listenerChannel = this.supabase.channel(`messages:all:${Date.now()}`);
     for (const channel of this.broadcastChannels.values()) {
       this.supabase.removeChannel(channel);
     }
