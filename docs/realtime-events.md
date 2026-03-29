@@ -80,7 +80,7 @@ const { data: reply } = await supabase
 
 ## Event Types
 
-Every broadcast payload has the shape `{ type: string, message_id: string, ...fields }`. The `type` field determines which additional fields are present.
+Every broadcast payload has the shape `{ type: string, message_id: string, ...fields }`. The `type` field determines which additional fields are present. Persisted (milestone) events also include `event_id: string` — the UUID of the corresponding row in the `events` table. Non-persisted events (deltas, lifecycle) do not include `event_id`.
 
 ### Text streaming
 
@@ -212,7 +212,8 @@ channels → messages → events (persisted milestones)
 
 All broadcasts use event name `"agent_event"` on the `channel:{channelId}` channel:
 
-```json
+```jsonc
+// Non-persisted event (no event_id)
 {
   "type": "broadcast",
   "event": "agent_event",
@@ -222,6 +223,18 @@ All broadcasts use event name `"agent_event"` on the `channel:{channelId}` chann
     "message_id": "msg-uuid"
   }
 }
+
+// Persisted milestone event (includes event_id)
+{
+  "type": "broadcast",
+  "event": "agent_event",
+  "payload": {
+    "type": "assistant_message",
+    "text": "Hello world",
+    "message_id": "msg-uuid",
+    "event_id": "evt-uuid"
+  }
+}
 ```
 
-The `message_id` field links the broadcast event to its parent agent message.
+The `message_id` field links the broadcast event to its parent agent message. The `event_id` field, present only on persisted milestone events, matches the `id` of the corresponding `events` table row — clients can use it for cache persistence without a round-trip.

@@ -150,6 +150,17 @@ describe("RealtimeListener", () => {
       expect(mockChannelFactory).toHaveBeenCalledWith("channel:ch-2");
     });
 
+    it("includes event_id in payload when provided", async () => {
+      listener.broadcastAgentEvent("ch-1", { type: "text_delta", text: "Hi" }, "msg-1", "evt-1");
+      await Promise.resolve();
+
+      expect(mockSend).toHaveBeenCalledWith({
+        type: "broadcast",
+        event: "agent_event",
+        payload: { type: "text_delta", text: "Hi", message_id: "msg-1", event_id: "evt-1" },
+      });
+    });
+
     it("spreads all event fields into payload", async () => {
       listener.broadcastAgentEvent(
         "ch-1",
