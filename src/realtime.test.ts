@@ -19,6 +19,8 @@ const mockChannel = {
 
 const mockChannelFactory = vi.fn(() => mockChannel);
 const mockRemoveChannel = vi.fn();
+const mockDisconnect = vi.fn();
+const mockConnect = vi.fn();
 
 vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(),
@@ -30,7 +32,11 @@ vi.mock("./db.js", () => ({
 
 import { RealtimeListener } from "./realtime.js";
 
-const mockSupabase = { channel: mockChannelFactory, removeChannel: mockRemoveChannel } as any;
+const mockSupabase = {
+  channel: mockChannelFactory,
+  removeChannel: mockRemoveChannel,
+  realtime: { disconnect: mockDisconnect, connect: mockConnect },
+} as any;
 
 describe("RealtimeListener", () => {
   let listener: RealtimeListener;
@@ -351,6 +357,69 @@ describe("RealtimeListener", () => {
 
       expect(reconnectTopic).not.toBe(constructorTopic);
       expect(reconnectTopic).toMatch(/^messages:all:\d+$/);
+    });
+
+    it("does not reset WebSocket on early reconnect attempts", () => {
+      mockSubscribe.mockImplementation((cb?: any) => {
+        subscribeCallback = cb;
+        return mockChannel;
+      });
+
+      listener.subscribe(vi.fn());
+      subscribeCallback!("SUBSCRIBED");
+
+      // Trigger 4 failures (attempts 1-4, below threshold of 5)
+      for (let i = 0; i < 4; i++) {
+        subscribeCallback!("CHANNEL_ERROR");
+        vi.advanceTimersByTime(60_000);
+      }
+
+      expect(mockDisconnect).not.toHaveBeenCalled();
+      expect(mockConnect).not.toHaveBeenCalled();
+    });
+
+    it("escalates to WebSocket reset at attempt 5", () => {
+      mockSubscribe.mockImplementation((cb?: any) => {
+        subscribeCallback = cb;
+        return mockChannel;
+      });
+
+      listener.subscribe(vi.fn());
+      subscribeCallback!("SUBSCRIBED");
+
+      // Trigger 5 failures — attempt 5 hits the threshold
+      for (let i = 0; i < 5; i++) {
+        subscribeCallback!("CHANNEL_ERROR");
+        vi.advanceTimersByTime(60_000);
+      }
+
+      expect(mockDisconnect).toHaveBeenCalledTimes(1);
+      expect(mockConnect).toHaveBeenCalledTimes(1);
+    });
+
+    it("resets WebSocket on every attempt at and after threshold", () => {
+      mockSubscribe.mockImplementation((cb?: any) => {
+        subscribeCallback = cb;
+        return mockChannel;
+      });
+
+      listener.subscribe(vi.fn());
+      subscribeCallback!("SUBSCRIBED");
+
+      // Burn through 4 attempts below threshold
+      for (let i = 0; i < 4; i++) {
+        subscribeCallback!("CHANNEL_ERROR");
+        vi.advanceTimersByTime(60_000);
+      }
+
+      // Attempts 5, 6, 7 should all reset WebSocket
+      for (let i = 0; i < 3; i++) {
+        subscribeCallback!("CHANNEL_ERROR");
+        vi.advanceTimersByTime(60_000);
+      }
+
+      expect(mockDisconnect).toHaveBeenCalledTimes(3);
+      expect(mockConnect).toHaveBeenCalledTimes(3);
     });
 
     it("does not cascade reconnects when removeChannel triggers CLOSED on old channel", () => {
