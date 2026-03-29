@@ -221,17 +221,18 @@ export class RealtimeListener {
       this.reconnectTimer = null;
 
       const resetWebSocket = this.reconnectAttempts >= RealtimeListener.WEBSOCKET_RESET_THRESHOLD;
+
+      // Swap to a fresh channel FIRST so the stale-channel guard
+      // (currentChannel !== this.listenerChannel) filters any CLOSED/ERROR
+      // callbacks triggered by disconnect() or removeChannel().
+      const oldChannel = this.listenerChannel;
+      this.listenerChannel = this.supabase.channel(`messages:all:${Date.now()}`);
+
       if (resetWebSocket) {
         this.log(`Resetting WebSocket (attempt ${this.reconnectAttempts})...`);
         this.supabase.realtime.disconnect();
       }
 
-      // Swap to a fresh channel — supabase.channel() deduplicates by
-      // topic name, so we use a unique suffix to get a genuinely new instance.
-      // Reassigning before removeChannel() ensures the stale-channel guard
-      // in subscribe() catches any CLOSED callbacks from the old channel.
-      const oldChannel = this.listenerChannel;
-      this.listenerChannel = this.supabase.channel(`messages:all:${Date.now()}`);
       this.supabase.removeChannel(oldChannel);
 
       if (resetWebSocket) {
