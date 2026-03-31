@@ -179,7 +179,7 @@ export async function ensureAgentAndSpace(
     const agentName = `${profile.username}'s agent`;
     const { data: newAgent, error: createError } = await supabase
       .from("agents")
-      .insert({ owner_id: profile.id, name: agentName })
+      .insert({ owner_id: profile.id, name: agentName, model: "unknown" })
       .select("id, name, owner_id")
       .single();
     if (createError) throw new Error(`Failed to create agent: ${createError.message}`);
