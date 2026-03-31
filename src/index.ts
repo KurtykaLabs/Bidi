@@ -1,6 +1,5 @@
 import "dotenv/config";
 import { randomUUID } from "node:crypto";
-import { createClient } from "@supabase/supabase-js";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { RealtimeListener, type MessageRow } from "./realtime.js";
 import {
@@ -11,9 +10,17 @@ import {
   getChannelSummary,
   updateChannelName,
   updateChannelSessionId,
+  updateAgentHeartbeat,
+  updateAgentModel,
   type HumanMessage,
 } from "./db.js";
 import { processAgentStream, type AgentEvent } from "./agent.js";
+import {
+  createAuthenticatedClient,
+  authenticate,
+  ensureProfile,
+  ensureAgentAndSpace,
+} from "./auth.js";
 
 const MILESTONE_TYPES = new Set([
   "assistant_message",
@@ -23,20 +30,9 @@ const MILESTONE_TYPES = new Set([
   "result",
 ]);
 
-const supabaseUrl = process.env.SUPABASE_URL!;
-const supabaseKey = process.env.SUPABASE_ANON_KEY!;
-const supabase = createClient(supabaseUrl, supabaseKey, {
-  realtime: {
-    worker: false,
-    heartbeatIntervalMs: 5_000,
-    heartbeatCallback: (status: string) => {
-      if (status !== "ok" && status !== "sent") {
-        console.warn(`[realtime] heartbeat ${status}`);
-      }
-    },
-  },
-});
-const listener = new RealtimeListener(supabase);
+const supabase = createAuthenticatedClient();
+let agentId: string;
+let listener: RealtimeListener;
 
 const responding = new Set<string>();
 
@@ -81,7 +77,8 @@ async function getAgentResponse(msg: HumanMessage) {
       supabase,
       msg.channelId,
       "agent",
-      msg.id
+      msg.id,
+      { agentId }
     );
 
     listener.broadcastAgentEvent(msg.channelId, { type: "ack" }, agentMessageId);
@@ -122,6 +119,9 @@ async function getAgentResponse(msg: HumanMessage) {
 
     const result = await processAgentStream(queryInstance, onEvent);
 
+    if (result.model) {
+      updateAgentModel(supabase, agentId, result.model).catch(() => {});
+    }
     if (result.sessionId) {
       await updateChannelSessionId(supabase, msg.channelId, result.sessionId);
     }
@@ -135,30 +135,49 @@ async function getAgentResponse(msg: HumanMessage) {
   }
 }
 
-listener.subscribe(async (row: MessageRow) => {
-  let text: string | null = null;
-  for (let i = 0; i < 3; i++) {
-    text = await getMessageText(supabase, row.id);
-    if (text?.trim()) break;
-    await new Promise((r) => setTimeout(r, 200 * (i + 1)));
-  }
-  if (!text?.trim()) return;
+async function main() {
+  const userId = await authenticate(supabase);
+  const profile = await ensureProfile(supabase);
+  const { agent, space } = await ensureAgentAndSpace(supabase, profile);
+  agentId = agent.id;
 
-  const msg: HumanMessage = {
-    id: row.id,
-    text,
-    channelId: row.channel_id,
-    parentMessageId: row.parent_message_id,
-  };
+  // Heartbeat: update agent health every 30s
+  await updateAgentHeartbeat(supabase, agentId);
+  const heartbeat = setInterval(() => updateAgentHeartbeat(supabase, agentId), 30_000);
 
-  console.log(`[user] (channel: ${msg.channelId}) ${msg.text}`);
-  getAgentResponse(msg);
-});
+  listener = new RealtimeListener(supabase);
 
-console.log("\nConnected (Agent mode). Listening for messages...\n");
+  listener.subscribe(async (row: MessageRow) => {
+    let text: string | null = null;
+    for (let i = 0; i < 3; i++) {
+      text = await getMessageText(supabase, row.id);
+      if (text?.trim()) break;
+      await new Promise((r) => setTimeout(r, 200 * (i + 1)));
+    }
+    if (!text?.trim()) return;
 
-process.on("SIGINT", () => {
-  console.log("\nBye!");
-  listener.unsubscribe();
-  process.exit();
+    const msg: HumanMessage = {
+      id: row.id,
+      text,
+      channelId: row.channel_id,
+      parentMessageId: row.parent_message_id,
+    };
+
+    console.log(`[user] (channel: ${msg.channelId}) ${msg.text}`);
+    getAgentResponse(msg);
+  });
+
+  console.log(`\nAgent "${agent.name}" online in "${space.name}". Listening for messages...\n`);
+
+  process.on("SIGINT", () => {
+    console.log("\nBye!");
+    clearInterval(heartbeat);
+    listener.unsubscribe();
+    process.exit();
+  });
+}
+
+main().catch((err) => {
+  console.error(`\nFatal: ${err.message}`);
+  process.exit(1);
 });

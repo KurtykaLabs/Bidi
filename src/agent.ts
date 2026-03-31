@@ -19,6 +19,7 @@ export type AgentEvent =
 export interface AgentStreamResult {
   text: string;
   sessionId: string | null;
+  model: string | null;
 }
 
 export function processStreamDelta(
@@ -112,6 +113,7 @@ export async function processAgentStream(
 ): Promise<AgentStreamResult> {
   let accumulatedText = "";
   let sessionId: string | null = null;
+  let model: string | null = null;
   const blockTypes = new Map<number, string>();
 
   for await (const message of messages) {
@@ -131,6 +133,9 @@ export async function processAgentStream(
     }
 
     if (message.type === "assistant" && "message" in message) {
+      if (!model && message.message.model) {
+        model = message.message.model;
+      }
       const content = message.message.content as Array<{
         type: string;
         text?: string;
@@ -205,5 +210,5 @@ export async function processAgentStream(
     }
   }
 
-  return { text: accumulatedText, sessionId };
+  return { text: accumulatedText, sessionId, model };
 }

@@ -24,6 +24,7 @@ import {
   getChannelSessionId,
   updateChannelName,
   updateChannelSessionId,
+  updateAgentHeartbeat,
   getChannelSummary,
 } from "./db.js";
 
@@ -63,6 +64,40 @@ describe("db", () => {
       expect(mockInsert).toHaveBeenCalledWith({
         channel_id: TEST_CHANNEL_ID,
         role: "agent",
+      });
+    });
+
+    it("includes profile_id when senderId has profileId", async () => {
+      await createMessage(supabase, TEST_CHANNEL_ID, "human", null, {
+        profileId: "profile-1",
+      });
+
+      expect(mockInsert).toHaveBeenCalledWith({
+        channel_id: TEST_CHANNEL_ID,
+        role: "human",
+        profile_id: "profile-1",
+      });
+    });
+
+    it("includes agent_id when senderId has agentId", async () => {
+      await createMessage(supabase, TEST_CHANNEL_ID, "agent", "parent-1", {
+        agentId: "agent-1",
+      });
+
+      expect(mockInsert).toHaveBeenCalledWith({
+        channel_id: TEST_CHANNEL_ID,
+        role: "agent",
+        parent_message_id: "parent-1",
+        agent_id: "agent-1",
+      });
+    });
+
+    it("omits sender fields when senderId is undefined", async () => {
+      await createMessage(supabase, TEST_CHANNEL_ID, "human");
+
+      expect(mockInsert).toHaveBeenCalledWith({
+        channel_id: TEST_CHANNEL_ID,
+        role: "human",
       });
     });
 
@@ -224,6 +259,33 @@ describe("db", () => {
       await expect(
         updateChannelSessionId(supabase, TEST_CHANNEL_ID, "sess-1")
       ).rejects.toEqual({ message: "DB error" });
+    });
+  });
+
+  describe("updateAgentHeartbeat", () => {
+    it("updates last_heartbeat_at on the agent row", async () => {
+      const mockEqResolved = vi.fn().mockResolvedValue({ error: null });
+      mockUpdate.mockReturnValueOnce({ eq: mockEqResolved });
+
+      await updateAgentHeartbeat(supabase, "agent-1");
+
+      expect(mockFrom).toHaveBeenCalledWith("agents");
+      expect(mockUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ last_heartbeat_at: expect.any(String) })
+      );
+      expect(mockEqResolved).toHaveBeenCalledWith("id", "agent-1");
+    });
+
+    it("logs error instead of throwing on failure", async () => {
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      mockUpdate.mockReturnValueOnce({
+        eq: vi.fn().mockResolvedValue({ error: { message: "DB error" } }),
+      });
+
+      await updateAgentHeartbeat(supabase, "agent-1");
+
+      expect(consoleSpy).toHaveBeenCalledWith("[heartbeat] DB error");
+      consoleSpy.mockRestore();
     });
   });
 
