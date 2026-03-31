@@ -112,6 +112,18 @@ export async function getHumanMessagesSince(
   return data ?? [];
 }
 
+export async function updateAgentModel(
+  supabase: SupabaseClient,
+  agentId: string,
+  model: string
+): Promise<void> {
+  const { error } = await supabase
+    .from("agents")
+    .update({ model })
+    .eq("id", agentId);
+  if (error) console.error(`[model] ${error.message}`);
+}
+
 export async function updateAgentHeartbeat(
   supabase: SupabaseClient,
   agentId: string

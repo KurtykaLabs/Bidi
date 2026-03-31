@@ -11,6 +11,7 @@ import {
   updateChannelName,
   updateChannelSessionId,
   updateAgentHeartbeat,
+  updateAgentModel,
   type HumanMessage,
 } from "./db.js";
 import { processAgentStream, type AgentEvent } from "./agent.js";
@@ -118,6 +119,9 @@ async function getAgentResponse(msg: HumanMessage) {
 
     const result = await processAgentStream(queryInstance, onEvent);
 
+    if (result.model) {
+      updateAgentModel(supabase, agentId, result.model).catch(() => {});
+    }
     if (result.sessionId) {
       await updateChannelSessionId(supabase, msg.channelId, result.sessionId);
     }
