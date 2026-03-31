@@ -85,7 +85,7 @@ END;
 $$;
 
 -- Rewrite list_spaces with GROUP BY and search_path
-DROP FUNCTION list_spaces();
+DROP FUNCTION IF EXISTS list_spaces();
 
 CREATE FUNCTION list_spaces()
 RETURNS TABLE (
@@ -129,9 +129,15 @@ RETURNS TABLE (
   name text,
   created_at timestamptz,
   last_activity_at timestamptz
-) LANGUAGE sql STABLE SECURITY DEFINER
+) LANGUAGE plpgsql STABLE SECURITY DEFINER
 SET search_path = public, auth
 AS $$
+BEGIN
+  IF NOT is_space_member(p_space_id) THEN
+    RAISE EXCEPTION 'Not a member of this space';
+  END IF;
+
+  RETURN QUERY
   SELECT
     c.id,
     c.name,
@@ -143,6 +149,7 @@ AS $$
   FROM channels c
   WHERE c.space_id = p_space_id
   ORDER BY last_activity_at DESC;
+END;
 $$;
 
 -- 2. Fix profiles_select — restrict to own row
@@ -151,6 +158,20 @@ CREATE POLICY profiles_select ON public.profiles
   FOR SELECT TO authenticated USING (id = auth.uid());
 
 -- 3. Delete legacy data and make space_id NOT NULL
+-- Guard: abort if legacy channels exist in a production environment
+-- where data loss would be unacceptable. For fresh/dev deployments,
+-- this safely cleans up pre-auth test data.
+DO $$
+DECLARE
+  legacy_count integer;
+BEGIN
+  SELECT count(*) INTO legacy_count FROM channels WHERE space_id IS NULL;
+  IF legacy_count > 0 THEN
+    RAISE NOTICE 'Deleting % legacy channel(s) with NULL space_id and their messages/events', legacy_count;
+  END IF;
+END;
+$$;
+
 DELETE FROM events WHERE message_id IN (
   SELECT m.id FROM messages m
   JOIN channels c ON c.id = m.channel_id
