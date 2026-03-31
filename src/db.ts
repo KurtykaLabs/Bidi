@@ -11,7 +11,8 @@ export async function createMessage(
   supabase: SupabaseClient,
   channelId: string,
   role: "human" | "agent",
-  parentMessageId?: string | null
+  parentMessageId?: string | null,
+  senderId?: { profileId?: string; agentId?: string }
 ): Promise<string> {
   const { data, error } = await supabase
     .from("messages")
@@ -19,6 +20,8 @@ export async function createMessage(
       channel_id: channelId,
       role,
       ...(parentMessageId && { parent_message_id: parentMessageId }),
+      ...(senderId?.profileId && { profile_id: senderId.profileId }),
+      ...(senderId?.agentId && { agent_id: senderId.agentId }),
     })
     .select("id")
     .single();
@@ -107,6 +110,17 @@ export async function getHumanMessagesSince(
     .order("created_at", { ascending: true });
   if (error) throw error;
   return data ?? [];
+}
+
+export async function updateAgentHeartbeat(
+  supabase: SupabaseClient,
+  agentId: string
+): Promise<void> {
+  const { error } = await supabase
+    .from("agents")
+    .update({ last_heartbeat_at: new Date().toISOString() })
+    .eq("id", agentId);
+  if (error) console.error(`[heartbeat] ${error.message}`);
 }
 
 export async function getChannelSummary(
