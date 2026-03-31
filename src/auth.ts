@@ -1,5 +1,5 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { createInterface } from "node:readline";
@@ -35,7 +35,7 @@ export interface Space {
 class FileStorage {
   private ensureDir(): void {
     if (!existsSync(BIDI_DIR)) {
-      mkdirSync(BIDI_DIR, { recursive: true });
+      mkdirSync(BIDI_DIR, { recursive: true, mode: 0o700 });
     }
   }
 
@@ -57,14 +57,14 @@ class FileStorage {
       // fresh file
     }
     data[key] = value;
-    writeFileSync(SESSION_FILE, JSON.stringify(data, null, 2));
+    writeFileSync(SESSION_FILE, JSON.stringify(data, null, 2), { mode: 0o600 });
   }
 
   removeItem(key: string): void {
     try {
       const data = JSON.parse(readFileSync(SESSION_FILE, "utf-8"));
       delete data[key];
-      writeFileSync(SESSION_FILE, JSON.stringify(data, null, 2));
+      writeFileSync(SESSION_FILE, JSON.stringify(data, null, 2), { mode: 0o600 });
     } catch {
       // nothing to remove
     }

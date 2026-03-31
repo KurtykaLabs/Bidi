@@ -63,20 +63,18 @@ describe("auth", () => {
 
   describe("authenticate", () => {
     it("returns user id when session exists", async () => {
-      const supabase = createMockSupabase({
-        auth: {
-          getSession: vi.fn().mockResolvedValue({
-            data: {
-              session: { user: { id: "user-1", email: "test@example.com" } },
-            },
-          }),
+      const supabase = createMockSupabase();
+      supabase.auth.getSession.mockResolvedValue({
+        data: {
+          session: { user: { id: "user-1", email: "test@example.com" } },
         },
       });
 
       const id = await authenticate(supabase);
 
       expect(id).toBe("user-1");
-      expect(supabase.auth.signInWithOtp).toBeUndefined();
+      expect(supabase.auth.signInWithOtp).not.toHaveBeenCalled();
+      expect(supabase.auth.verifyOtp).not.toHaveBeenCalled();
     });
 
     it("runs OTP flow when no session exists", async () => {
