@@ -3,13 +3,12 @@
 -- 1. Drop stale public-role policies on profiles
 -- 2. Pin search_path on handle_new_user, handle_updated_at, send_message
 -- 3. Revoke anon privileges on all tables and functions
--- 4. Fix default privileges for future objects
 
 -- 1. Drop stale public-role policies on profiles
 -- These were created via the dashboard and never removed when migration 009
 -- added correct authenticated-only replacements.
-DROP POLICY "Users can read own profile" ON public.profiles;
-DROP POLICY "Users can update own profile" ON public.profiles;
+DROP POLICY IF EXISTS "Users can read own profile" ON public.profiles;
+DROP POLICY IF EXISTS "Users can update own profile" ON public.profiles;
 
 -- 2. Fix search_path on three functions flagged by Supabase linter
 
