@@ -26,6 +26,11 @@ vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(),
 }));
 
+vi.mock("./analytics.js", () => ({
+  trackEvent: vi.fn(),
+  captureError: vi.fn(),
+}));
+
 vi.mock("./db.js", () => ({
   getHumanMessagesSince: vi.fn().mockResolvedValue([]),
 }));

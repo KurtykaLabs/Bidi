@@ -1,7 +1,7 @@
 import type { SupabaseClient, RealtimeChannel } from "@supabase/supabase-js";
 import type { AgentEvent } from "./agent.js";
 import { getHumanMessagesSince } from "./db.js";
-import { appendFile } from "node:fs";
+import { trackEvent, captureError } from "./analytics.js";
 
 export interface MessageRow {
   id: string;
@@ -27,7 +27,6 @@ export class RealtimeListener {
   private static readonly BASE_RECONNECT_DELAY = 3_000;
   private static readonly STABLE_CONNECTION_MS = 30_000;
   private static readonly WEBSOCKET_RESET_THRESHOLD = 5;
-  private static readonly LOG_FILE = "bidi.log";
 
   private ts(): string {
     return new Date().toLocaleString();
@@ -45,20 +44,15 @@ export class RealtimeListener {
   }
 
   private log(msg: string): void {
-    const line = `[${this.ts()}] ${msg}`;
-    console.log(line);
-    appendFile(RealtimeListener.LOG_FILE, line + "\n", () => {});
+    console.log(`[${this.ts()}] ${msg}`);
   }
 
   private logError(msg: string, err?: unknown): void {
-    const line = `[${this.ts()}] ${msg}`;
     if (err !== undefined) {
-      console.error(line, err);
+      console.error(`[${this.ts()}] ${msg}`, err);
     } else {
-      console.error(line);
+      console.error(`[${this.ts()}] ${msg}`);
     }
-    const errStr = err !== undefined ? ` ${this.formatError(err)}` : "";
-    appendFile(RealtimeListener.LOG_FILE, line + errStr + "\n", () => {});
   }
 
   constructor(supabase: SupabaseClient) {
@@ -82,8 +76,9 @@ export class RealtimeListener {
           const row = payload.new as MessageRow;
           if (row.role !== "human") return;
           if (row.created_at) this.lastSeenAt = row.created_at;
-          Promise.resolve(onMessage(row)).catch((err) => {
-            console.error(`[realtime] onMessage error: ${err.message}`);
+          Promise.resolve(onMessage(row)).catch((err: unknown) => {
+            captureError(err, { context: "realtime_onMessage" });
+            console.error(`[realtime] onMessage error: ${this.formatError(err)}`);
           });
         }
       )
@@ -99,12 +94,18 @@ export class RealtimeListener {
             `Realtime listener connected (attempt ${this.reconnectAttempts})` +
               (downtime ? ` (was down for ${downtime}s)` : "")
           );
+          trackEvent("realtime_connected", {
+            attempt: this.reconnectAttempts,
+            downtimeSeconds: downtime ? parseFloat(downtime) : null,
+            isReconnect,
+          });
           // Only reset backoff after connection is stable for 30s
           if (this.stabilityTimer) clearTimeout(this.stabilityTimer);
           this.stabilityTimer = setTimeout(() => {
             this.stabilityTimer = null;
             if (this.reconnectAttempts > 0) {
               this.log(`Connection stable for ${RealtimeListener.STABLE_CONNECTION_MS / 1000}s, resetting backoff (was attempt ${this.reconnectAttempts})`);
+              trackEvent("realtime_stable", { previousAttempts: this.reconnectAttempts });
             }
             this.reconnectAttempts = 0;
           }, RealtimeListener.STABLE_CONNECTION_MS);
@@ -125,6 +126,11 @@ export class RealtimeListener {
           this.logError(
             `Realtime listener ${status} (uptime: ${uptime ?? "?"}s) [${errDetail}]`
           );
+          trackEvent("realtime_disconnected", {
+            status,
+            uptimeSeconds: uptime ? parseFloat(uptime) : null,
+            errorDetail: errDetail,
+          });
           if (!this.disposed) this.reconnect(onMessage);
         }
       });
@@ -194,17 +200,20 @@ export class RealtimeListener {
     try {
       const missed = await getHumanMessagesSince(this.supabase, this.lastSeenAt);
       if (missed.length > 0) {
+        trackEvent("realtime_catchup", { missedCount: missed.length });
         console.log(`[realtime] catching up on ${missed.length} missed message(s)`);
         for (const row of missed) {
-          await Promise.resolve(onMessage(row)).catch((err) => {
-            console.error(`[realtime] catch-up onMessage error: ${err.message}`);
+          await Promise.resolve(onMessage(row)).catch((err: unknown) => {
+            captureError(err, { context: "realtime_catchup_onMessage" });
+            console.error(`[realtime] catch-up onMessage error: ${this.formatError(err)}`);
           });
         }
         const last = missed[missed.length - 1];
         if (last.created_at) this.lastSeenAt = last.created_at;
       }
-    } catch (err: any) {
-      console.error(`[realtime] catch-up query failed: ${err.message}`);
+    } catch (err: unknown) {
+      captureError(err, { context: "realtime_catchup_query" });
+      console.error(`[realtime] catch-up query failed: ${this.formatError(err)}`);
     }
   }
 
@@ -215,6 +224,7 @@ export class RealtimeListener {
       RealtimeListener.MAX_RECONNECT_DELAY
     );
     this.reconnectAttempts++;
+    trackEvent("realtime_reconnect_scheduled", { attempt: this.reconnectAttempts, delayMs: delay });
     this.log(`Reconnecting in ${(delay / 1000).toFixed(0)}s (attempt ${this.reconnectAttempts})...`);
 
     this.reconnectTimer = setTimeout(() => {
@@ -229,6 +239,7 @@ export class RealtimeListener {
       this.listenerChannel = this.supabase.channel(`messages:all:${Date.now()}`);
 
       if (resetWebSocket) {
+        trackEvent("realtime_websocket_reset", { attempt: this.reconnectAttempts });
         this.log(`Resetting WebSocket (attempt ${this.reconnectAttempts})...`);
         this.supabase.realtime.disconnect();
       }
@@ -239,6 +250,7 @@ export class RealtimeListener {
         this.supabase.realtime.connect();
       }
 
+      trackEvent("realtime_reconnect_attempt", { attempt: this.reconnectAttempts, willResetWebSocket: resetWebSocket });
       this.log(`Reconnect attempt ${this.reconnectAttempts}...`);
       this.subscribe(onMessage);
     }, delay);

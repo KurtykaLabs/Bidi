@@ -22,6 +22,13 @@ import {
   ensureProfile,
   ensureAgentAndSpace,
 } from "./auth.js";
+import {
+  initAnalytics,
+  setDistinctId,
+  trackEvent,
+  captureError,
+  shutdownAnalytics,
+} from "./analytics.js";
 
 const MILESTONE_TYPES = new Set([
   "assistant_message",
@@ -62,12 +69,18 @@ async function getAgentResponse(msg: HumanMessage) {
 
   try {
     const sessionId = await getChannelSessionId(supabase, msg.channelId);
+    trackEvent("agent_response_started", {
+      channelId: msg.channelId,
+      hasSession: !!sessionId,
+      hasParentMessage: !!msg.parentMessageId,
+    });
 
     if (!sessionId) {
       generateChannelName(msg.text)
         .then(async (name) => {
           const updated = await updateChannelName(supabase, msg.channelId, name);
           if (updated) {
+            trackEvent("channel_named", { channelId: msg.channelId, name });
             listener.broadcastChannelEvent(msg.channelId, "channel_renamed", { name });
           }
         })
@@ -113,12 +126,20 @@ async function getAgentResponse(msg: HumanMessage) {
         });
       }
 
+      if (event.type === "tool_use_start" && "name" in event) {
+        trackEvent("tool_used", { channelId: msg.channelId, toolName: event.name });
+      }
       if (event.type === "text_delta") {
         process.stdout.write(event.text);
       }
     };
 
     const result = await processAgentStream(queryInstance, onEvent);
+    trackEvent("agent_response_completed", {
+      channelId: msg.channelId,
+      model: result.model,
+      responseLength: result.text.length,
+    });
 
     if (result.model) {
       updateAgentModel(supabase, agentId, result.model).catch(() => {});
@@ -130,6 +151,7 @@ async function getAgentResponse(msg: HumanMessage) {
       process.stdout.write("\n");
     }
   } catch (err: any) {
+    captureError(err, { channelId: msg.channelId });
     console.error(`[error] Agent: ${err.message}`);
   } finally {
     responding.delete(key);
@@ -137,10 +159,14 @@ async function getAgentResponse(msg: HumanMessage) {
 }
 
 async function main() {
+  initAnalytics();
   const userId = await authenticate(supabase);
+  setDistinctId(userId);
   const profile = await ensureProfile(supabase);
   const { agent } = await ensureAgentAndSpace(supabase, profile);
   agentId = agent.id;
+  setDistinctId(agentId);
+  trackEvent("agent_started", { agentName: agent.name });
 
   // Heartbeat: update agent health every 30s
   await updateAgentHeartbeat(supabase, agentId);
@@ -191,51 +217,81 @@ async function main() {
             .update({ name: newName })
             .eq("id", agentId);
           if (error) {
+            captureError(new Error(error.message), { cmd: "rename" });
             console.error(`Failed to rename: ${error.message}`);
           } else {
+            trackEvent("command_rename", { newName });
             console.log(`Agent renamed to "${newName}".`);
           }
           break;
         }
         case "logout": {
+          trackEvent("command_logout");
           console.log("Logging out...");
           const { error } = await supabase.auth.signOut({ scope: "local" });
           if (error) {
+            captureError(new Error(error.message), { cmd: "logout" });
             console.error(`Failed to log out: ${error.message}`);
             break;
           }
+          trackEvent("agent_shutdown", { reason: "logout" });
           clearInterval(heartbeat);
           listener.unsubscribe();
+          await shutdownAnalytics();
           rl.close();
           process.exit(0);
           break;
         }
         case "help":
+          trackEvent("command_help");
           console.log("Commands:");
           console.log("  /rename <name>  — Rename your agent");
           console.log("  /logout         — Sign out and exit");
           console.log("  /help           — Show this message");
           break;
         default:
+          trackEvent("command_unknown", { cmd });
           console.log(`Unknown command: /${cmd}. Type /help for commands.`);
       }
     } catch (err: any) {
+      captureError(err, { cmd });
       console.error(`Command failed: ${err.message}`);
     }
   });
 
-  function shutdown() {
+  async function shutdown() {
     console.log("\nBye!");
+    trackEvent("agent_shutdown", { reason: "SIGINT" });
     clearInterval(heartbeat);
     listener.unsubscribe();
+    await shutdownAnalytics();
     rl.close();
     process.exit();
   }
 
-  process.on("SIGINT", shutdown);
+  process.on("SIGINT", () => {
+    void shutdown().catch((err: any) => {
+      console.error(`Shutdown failed: ${err.message}`);
+      process.exit(1);
+    });
+  });
 }
 
-main().catch((err) => {
+process.on("uncaughtException", async (err) => {
+  captureError(err, { fatal: true });
+  await shutdownAnalytics();
+  process.exit(1);
+});
+
+process.on("unhandledRejection", async (reason) => {
+  captureError(reason, { fatal: true });
+  await shutdownAnalytics();
+  process.exit(1);
+});
+
+main().catch(async (err) => {
+  captureError(err, { fatal: true });
   console.error(`\nFatal: ${err.message}`);
+  await shutdownAnalytics();
   process.exit(1);
 });

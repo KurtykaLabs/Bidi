@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync } from "n
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { createInterface } from "node:readline";
+import { trackEvent, captureError } from "./analytics.js";
 
 const DEFAULT_SUPABASE_URL = "https://vikrckqkpxfltoodrpui.supabase.co";
 const DEFAULT_SUPABASE_ANON_KEY =
@@ -107,6 +108,7 @@ export async function authenticate(supabase: SupabaseClient): Promise<string> {
 
   if (session?.user) {
     console.log(`\nWelcome back, ${session.user.email}!`);
+    trackEvent("auth_session_resumed", { userId: session.user.id });
     return session.user.id;
   }
 
@@ -114,7 +116,11 @@ export async function authenticate(supabase: SupabaseClient): Promise<string> {
   const email = await prompt("Email: ");
 
   const { error: otpError } = await supabase.auth.signInWithOtp({ email });
-  if (otpError) throw new Error(`Failed to send OTP: ${otpError.message}`);
+  if (otpError) {
+    captureError(new Error(otpError.message), { step: "otp_send" });
+    throw new Error(`Failed to send OTP: ${otpError.message}`);
+  }
+  trackEvent("auth_otp_requested");
 
   console.log(`\nCheck your email for a 6-digit code.`);
   const code = await prompt("Code: ");
@@ -124,9 +130,13 @@ export async function authenticate(supabase: SupabaseClient): Promise<string> {
     token: code,
     type: "email",
   });
-  if (verifyError) throw new Error(`Verification failed: ${verifyError.message}`);
+  if (verifyError) {
+    captureError(new Error(verifyError.message), { step: "otp_verify" });
+    throw new Error(`Verification failed: ${verifyError.message}`);
+  }
   if (!data.session) throw new Error("No session returned after verification");
 
+  trackEvent("auth_otp_verified");
   console.log(`\nAuthenticated as ${email}!`);
   return data.session.user.id;
 }
@@ -154,6 +164,7 @@ export async function ensureProfile(supabase: SupabaseClient): Promise<Profile> 
     if (updateError) throw new Error(`Failed to set username: ${updateError.message}`);
 
     profile.username = username;
+    trackEvent("profile_username_set");
     console.log(`Username set to "${username}".`);
   }
 
@@ -184,6 +195,7 @@ export async function ensureAgentAndSpace(
       .single();
     if (createError) throw new Error(`Failed to create agent: ${createError.message}`);
     agent = newAgent;
+    trackEvent("agent_created", { agentName });
     console.log(`Created agent "${agentName}".`);
   }
 
@@ -209,6 +221,7 @@ export async function ensureAgentAndSpace(
       .single();
     if (fetchError) throw new Error(`Failed to fetch new space: ${fetchError.message}`);
     space = newSpace;
+    trackEvent("space_created");
     console.log(`Created space with #general channel.`);
   }
 
