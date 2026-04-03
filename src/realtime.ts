@@ -76,9 +76,9 @@ export class RealtimeListener {
           const row = payload.new as MessageRow;
           if (row.role !== "human") return;
           if (row.created_at) this.lastSeenAt = row.created_at;
-          Promise.resolve(onMessage(row)).catch((err) => {
+          Promise.resolve(onMessage(row)).catch((err: unknown) => {
             captureError(err, { context: "realtime_onMessage" });
-            console.error(`[realtime] onMessage error: ${err.message}`);
+            console.error(`[realtime] onMessage error: ${this.formatError(err)}`);
           });
         }
       )
@@ -203,17 +203,17 @@ export class RealtimeListener {
         trackEvent("realtime_catchup", { missedCount: missed.length });
         console.log(`[realtime] catching up on ${missed.length} missed message(s)`);
         for (const row of missed) {
-          await Promise.resolve(onMessage(row)).catch((err) => {
+          await Promise.resolve(onMessage(row)).catch((err: unknown) => {
             captureError(err, { context: "realtime_catchup_onMessage" });
-            console.error(`[realtime] catch-up onMessage error: ${err.message}`);
+            console.error(`[realtime] catch-up onMessage error: ${this.formatError(err)}`);
           });
         }
         const last = missed[missed.length - 1];
         if (last.created_at) this.lastSeenAt = last.created_at;
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       captureError(err, { context: "realtime_catchup_query" });
-      console.error(`[realtime] catch-up query failed: ${err.message}`);
+      console.error(`[realtime] catch-up query failed: ${this.formatError(err)}`);
     }
   }
 

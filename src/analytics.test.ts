@@ -38,11 +38,16 @@ describe("analytics", () => {
       );
     });
 
-    it("does not create client when BIDI_TELEMETRY=off", () => {
+    it("does not create client when BIDI_TELEMETRY=off", async () => {
       vi.stubEnv("BIDI_TELEMETRY", "off");
-      // Re-import to get fresh module state
       vi.resetModules();
-      // Since we can't easily re-import with module state, test via trackEvent behavior
+      const { initAnalytics: init, trackEvent: track } = await import("./analytics.js");
+
+      init();
+      expect(PostHog).not.toHaveBeenCalled();
+
+      track("test_event", { foo: "bar" });
+      expect(mockCapture).not.toHaveBeenCalled();
     });
   });
 

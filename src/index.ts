@@ -161,6 +161,7 @@ async function getAgentResponse(msg: HumanMessage) {
 async function main() {
   initAnalytics();
   const userId = await authenticate(supabase);
+  setDistinctId(userId);
   const profile = await ensureProfile(supabase);
   const { agent } = await ensureAgentAndSpace(supabase, profile);
   agentId = agent.id;
@@ -268,7 +269,12 @@ async function main() {
     process.exit();
   }
 
-  process.on("SIGINT", () => { shutdown(); });
+  process.on("SIGINT", () => {
+    void shutdown().catch((err: any) => {
+      console.error(`Shutdown failed: ${err.message}`);
+      process.exit(1);
+    });
+  });
 }
 
 process.on("uncaughtException", async (err) => {

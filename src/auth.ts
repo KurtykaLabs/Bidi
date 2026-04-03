@@ -108,7 +108,7 @@ export async function authenticate(supabase: SupabaseClient): Promise<string> {
 
   if (session?.user) {
     console.log(`\nWelcome back, ${session.user.email}!`);
-    trackEvent("auth_session_resumed", { email: session.user.email });
+    trackEvent("auth_session_resumed", { userId: session.user.id });
     return session.user.id;
   }
 
@@ -117,10 +117,10 @@ export async function authenticate(supabase: SupabaseClient): Promise<string> {
 
   const { error: otpError } = await supabase.auth.signInWithOtp({ email });
   if (otpError) {
-    captureError(new Error(otpError.message), { step: "otp_send", email });
+    captureError(new Error(otpError.message), { step: "otp_send" });
     throw new Error(`Failed to send OTP: ${otpError.message}`);
   }
-  trackEvent("auth_otp_requested", { email });
+  trackEvent("auth_otp_requested");
 
   console.log(`\nCheck your email for a 6-digit code.`);
   const code = await prompt("Code: ");
@@ -131,12 +131,12 @@ export async function authenticate(supabase: SupabaseClient): Promise<string> {
     type: "email",
   });
   if (verifyError) {
-    captureError(new Error(verifyError.message), { step: "otp_verify", email });
+    captureError(new Error(verifyError.message), { step: "otp_verify" });
     throw new Error(`Verification failed: ${verifyError.message}`);
   }
   if (!data.session) throw new Error("No session returned after verification");
 
-  trackEvent("auth_otp_verified", { email });
+  trackEvent("auth_otp_verified");
   console.log(`\nAuthenticated as ${email}!`);
   return data.session.user.id;
 }
