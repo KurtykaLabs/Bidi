@@ -198,7 +198,7 @@ async function main() {
       }
       case "logout":
         console.log("Logging out...");
-        await supabase.auth.signOut();
+        await supabase.auth.signOut({ scope: "local" });
         clearInterval(heartbeat);
         listener.unsubscribe();
         rl.close();
