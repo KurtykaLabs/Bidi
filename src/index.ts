@@ -178,40 +178,49 @@ async function main() {
     if (!input.startsWith("/")) return;
 
     const [cmd, ...args] = input.slice(1).split(/\s+/);
-    switch (cmd) {
-      case "rename": {
-        const newName = args.join(" ");
-        if (!newName) {
-          console.log("Usage: /rename <name>");
+    try {
+      switch (cmd) {
+        case "rename": {
+          const newName = args.join(" ");
+          if (!newName) {
+            console.log("Usage: /rename <name>");
+            break;
+          }
+          const { error } = await supabase
+            .from("agents")
+            .update({ name: newName })
+            .eq("id", agentId);
+          if (error) {
+            console.error(`Failed to rename: ${error.message}`);
+          } else {
+            console.log(`Agent renamed to "${newName}".`);
+          }
           break;
         }
-        const { error } = await supabase
-          .from("agents")
-          .update({ name: newName })
-          .eq("id", agentId);
-        if (error) {
-          console.error(`Failed to rename: ${error.message}`);
-        } else {
-          console.log(`Agent renamed to "${newName}".`);
+        case "logout": {
+          console.log("Logging out...");
+          const { error } = await supabase.auth.signOut({ scope: "local" });
+          if (error) {
+            console.error(`Failed to log out: ${error.message}`);
+            break;
+          }
+          clearInterval(heartbeat);
+          listener.unsubscribe();
+          rl.close();
+          process.exit(0);
+          break;
         }
-        break;
+        case "help":
+          console.log("Commands:");
+          console.log("  /rename <name>  — Rename your agent");
+          console.log("  /logout         — Sign out and exit");
+          console.log("  /help           — Show this message");
+          break;
+        default:
+          console.log(`Unknown command: /${cmd}. Type /help for commands.`);
       }
-      case "logout":
-        console.log("Logging out...");
-        await supabase.auth.signOut({ scope: "local" });
-        clearInterval(heartbeat);
-        listener.unsubscribe();
-        rl.close();
-        process.exit(0);
-        break;
-      case "help":
-        console.log("Commands:");
-        console.log("  /rename <name>  — Rename your agent");
-        console.log("  /logout         — Sign out and exit");
-        console.log("  /help           — Show this message");
-        break;
-      default:
-        console.log(`Unknown command: /${cmd}. Type /help for commands.`);
+    } catch (err: any) {
+      console.error(`Command failed: ${err.message}`);
     }
   });
 
