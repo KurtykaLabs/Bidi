@@ -231,7 +231,7 @@ describe("auth", () => {
 
     it("returns existing agent and space", async () => {
       const agent = { id: "agent-1", name: "casey's agent", owner_id: "user-1" };
-      const space = { id: "space-1", name: "casey's space", agent_id: "agent-1" };
+      const space = { id: "space-1", agent_id: "agent-1" };
 
       const supabase = createMockSupabase();
       let fromCallCount = 0;
@@ -257,9 +257,11 @@ describe("auth", () => {
       expect(result.space).toEqual(space);
     });
 
-    it("creates agent when none exists", async () => {
-      const newAgent = { id: "agent-new", name: "casey's agent", owner_id: "user-1" };
-      const space = { id: "space-1", name: "casey's space", agent_id: "agent-new" };
+    it("creates agent when none exists, prompting for name", async () => {
+      const newAgent = { id: "agent-new", name: "my bot", owner_id: "user-1" };
+      const space = { id: "space-1", agent_id: "agent-new" };
+
+      mockPromptResponse("my bot");
 
       const mockInsertSingle = vi.fn().mockResolvedValue({
         data: newAgent,
@@ -297,7 +299,7 @@ describe("auth", () => {
 
     it("creates space via RPC when none exists", async () => {
       const agent = { id: "agent-1", name: "casey's agent", owner_id: "user-1" };
-      const newSpace = { id: "space-new", name: "casey's space", agent_id: "agent-1" };
+      const newSpace = { id: "space-new", agent_id: "agent-1" };
 
       const supabase = createMockSupabase();
       supabase.rpc.mockResolvedValue({ data: "space-new", error: null });
@@ -333,7 +335,6 @@ describe("auth", () => {
 
       expect(supabase.rpc).toHaveBeenCalledWith("create_space", {
         p_agent_id: "agent-1",
-        p_name: "casey's space",
       });
       expect(result.space).toEqual(newSpace);
     });
@@ -382,6 +383,21 @@ describe("auth", () => {
 
       await expect(ensureAgentAndSpace(supabase, profile)).rejects.toThrow(
         "Failed to create space: Not the agent owner"
+      );
+    });
+
+    it("throws when agent name is empty", async () => {
+      mockPromptResponse("");
+
+      const supabase = createMockSupabase();
+      supabase.from.mockReturnValue({
+        select: vi.fn(() => ({
+          eq: vi.fn().mockResolvedValue({ data: [], error: null }),
+        })),
+      });
+
+      await expect(ensureAgentAndSpace(supabase, profile)).rejects.toThrow(
+        "Agent name is required"
       );
     });
   });

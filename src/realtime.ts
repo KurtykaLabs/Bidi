@@ -30,7 +30,7 @@ export class RealtimeListener {
   private static readonly LOG_FILE = "bidi.log";
 
   private ts(): string {
-    return new Date().toISOString().replace("T", " ").slice(0, 19);
+    return new Date().toLocaleString();
   }
 
   private formatError(err: unknown): string {

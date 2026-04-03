@@ -27,7 +27,6 @@ export interface Agent {
 
 export interface Space {
   id: string;
-  name: string;
   agent_id: string;
 }
 
@@ -176,7 +175,8 @@ export async function ensureAgentAndSpace(
   if (agents && agents.length > 0) {
     agent = agents[0];
   } else {
-    const agentName = `${profile.username}'s agent`;
+    const agentName = await prompt("Agent name: ");
+    if (!agentName) throw new Error("Agent name is required");
     const { data: newAgent, error: createError } = await supabase
       .from("agents")
       .insert({ owner_id: profile.id, name: agentName, model: "unknown" })
@@ -190,7 +190,7 @@ export async function ensureAgentAndSpace(
   // Check for existing space
   const { data: spaces, error: spaceError } = await supabase
     .from("spaces")
-    .select("id, name, agent_id")
+    .select("id, agent_id")
     .eq("agent_id", agent.id);
   if (spaceError) throw new Error(`Failed to fetch spaces: ${spaceError.message}`);
 
@@ -198,19 +198,18 @@ export async function ensureAgentAndSpace(
   if (spaces && spaces.length > 0) {
     space = spaces[0];
   } else {
-    const spaceName = `${profile.username}'s space`;
     const { data: spaceId, error: createError } = await supabase
-      .rpc("create_space", { p_agent_id: agent.id, p_name: spaceName });
+      .rpc("create_space", { p_agent_id: agent.id });
     if (createError) throw new Error(`Failed to create space: ${createError.message}`);
 
     const { data: newSpace, error: fetchError } = await supabase
       .from("spaces")
-      .select("id, name, agent_id")
+      .select("id, agent_id")
       .eq("id", spaceId)
       .single();
     if (fetchError) throw new Error(`Failed to fetch new space: ${fetchError.message}`);
     space = newSpace;
-    console.log(`Created space "${spaceName}" with #general channel.`);
+    console.log(`Created space with #general channel.`);
   }
 
   return { agent, space };
