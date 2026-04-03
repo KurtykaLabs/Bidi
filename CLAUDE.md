@@ -56,6 +56,11 @@ channels → messages → events (persisted milestones)
 - `processStreamEvent()` — maps raw SDK stream events to `AgentEvent` with block type tracking
 - `processStreamDelta()` / `extractAssistantText()` — internal helpers
 
+**`src/analytics.ts`** — PostHog telemetry wrapper (on by default, disable with `BIDI_TELEMETRY=off`):
+- `initAnalytics()` / `setDistinctId()` — initialize client, set agent ID after auth
+- `trackEvent()` / `captureError()` — event capture and error tracking
+- `shutdownAnalytics()` — flush pending events on exit
+
 **`docs/realtime-events.md`** — Client spec documenting all event types, payloads, and Supabase subscription patterns.
 
 **`supabase/migrations/`** — Database migrations:
@@ -75,3 +80,5 @@ Tests live next to source files (`*.test.ts`). Vitest with module-level mocks fo
 ## Environment
 
 Requires `.env` with `SUPABASE_URL` and `SUPABASE_ANON_KEY`. Copy from `.env.example`.
+
+Optional: Set `BIDI_TELEMETRY=off` to disable PostHog analytics (on by default).

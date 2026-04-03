@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+// Mock analytics
+vi.mock("./analytics.js", () => ({
+  trackEvent: vi.fn(),
+  captureError: vi.fn(),
+}));
+
 // Mock node:fs
 vi.mock("node:fs", () => ({
   existsSync: vi.fn(),
