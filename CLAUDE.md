@@ -63,6 +63,16 @@ channels → messages → events (persisted milestones)
 
 **`docs/realtime-events.md`** — Client spec documenting all event types, payloads, and Supabase subscription patterns.
 
+### E2E encryption (whitepaper conformance)
+
+Per the whitepaper at bidi.sh/whitepaper, content at rest in Supabase is encrypted with libsodium primitives (Argon2id-wrapped seed → Curve25519 keypair → sealed-box-wrapped per-space key → XSalsa20-Poly1305 secretbox for content). Implementation lives in `src/crypto.ts`, `src/keyring.ts`, `src/passphrase.ts`. Encrypted columns: `agents.name`, `channels.name`, `events.payload`. The CLI caches the unwrapped space key at `~/.bidi/spaces/<spaceId>.json` (mode 0o600) so users only enter their passphrase on fresh installs / cache misses.
+
+**Realtime broadcasts are encrypted.** `RealtimeListener` (constructed with the keyring) wraps every `agent_event` and `channel_event` payload in the same unified envelope as persisted content (`{ data: base64(version||nonce||ciphertext) }`). Receivers decrypt with the space key. See `docs/realtime-events.md` for the wire format clients consume. Tests verify that no plaintext appears in the wire payload.
+
+**No plaintext name window on agent creation.** New agents go through `findExistingAgent` → `promptAgentName` → generate space key → `encryptString(name)` → `createAgent(encryptedName)` → `commitSpace`. The agent row never exists in the database with a plaintext name — even briefly — so WAL, audit logs, and replicas only ever observe the ciphertext. The legacy `update_agent` RPC is kept only for the `/rename` command.
+
+**Analytics hygiene:** never send a value that's encrypted-at-rest (agent name, channel name, decrypted event content) to PostHog. `trackEvent` / `captureError` properties must be UUIDs, timestamps, counts, or technical enums only.
+
 **`supabase/migrations/`** — Database migrations:
 - `001_event_tables.sql` — Original `human_events` and `agent_events` tables (superseded)
 - `002_channels_threads_messages.sql` — Creates `channels`, `threads`, `messages`, `events` tables; drops old tables

@@ -1,10 +1,23 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import {
+  decryptJsonPayload,
+  encryptJsonPayload,
+  isEncryptedPayload,
+} from "./crypto.js";
+import type { Keyring } from "./keyring.js";
 
 export interface HumanMessage {
   id: string;
   text: string;
   channelId: string;
   parentMessageId: string | null;
+}
+
+export interface ProfileKeys {
+  id: string;
+  public_key: string | null;
+  passphrase_blob: string | null;
+  recovery_blob: string | null;
 }
 
 export async function createMessage(
@@ -34,17 +47,37 @@ export async function persistEvent(
   eventId: string,
   messageId: string,
   type: string,
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  keyring: Keyring
 ): Promise<void> {
+  const encoded = await encryptJsonPayload(keyring.getSpaceKey(), payload);
   const { error } = await supabase
     .from("events")
-    .insert({ id: eventId, message_id: messageId, type, payload });
+    .insert({ id: eventId, message_id: messageId, type, payload: encoded });
   if (error) throw error;
+}
+
+// Encrypted payloads are JSONB strings (base64 of the unified content blob);
+// legacy plaintext payloads are JSONB objects. This invariant holds because
+// no writer in this codebase has ever stored a string-typed JSONB payload as
+// plaintext — `persistEvent` always passed a `Record<string, unknown>`. Writers
+// from other clients (e.g. mobile via `send_message` RPC) follow the same
+// rule. If that ever changes, this discriminator must be revisited (likely by
+// adding a structural marker, e.g. a leading byte check).
+async function decryptPayload(
+  keyring: Keyring,
+  payload: unknown
+): Promise<Record<string, unknown>> {
+  if (isEncryptedPayload(payload)) {
+    return decryptJsonPayload(keyring.getSpaceKey(), payload);
+  }
+  return (payload as Record<string, unknown>) ?? {};
 }
 
 export async function getMessageText(
   supabase: SupabaseClient,
-  messageId: string
+  messageId: string,
+  keyring: Keyring
 ): Promise<string | null> {
   const { data, error } = await supabase
     .from("events")
@@ -55,7 +88,8 @@ export async function getMessageText(
     .limit(1)
     .single();
   if (error) return null;
-  return (data.payload as { text?: string })?.text ?? null;
+  const decoded = await decryptPayload(keyring, data.payload);
+  return (decoded as { text?: string })?.text ?? null;
 }
 
 export async function getChannelSessionId(
@@ -138,6 +172,7 @@ export async function updateAgentHeartbeat(
 export async function getChannelSummary(
   supabase: SupabaseClient,
   channelId: string,
+  keyring: Keyring,
   limit = 20
 ): Promise<string | null> {
   const { data, error } = await supabase
@@ -153,15 +188,121 @@ export async function getChannelSummary(
 
   const lines: string[] = [];
   for (const msg of data.reverse()) {
-    const events = msg.events as Array<{ type: string; payload: { text?: string } }>;
+    const events = msg.events as Array<{ type: string; payload: unknown }>;
     const textEvent = events?.find(
       (e) => e.type === "text" || e.type === "assistant_message"
     );
-    const text = textEvent?.payload?.text;
-    if (text) {
-      lines.push(`${msg.role}: ${text}`);
-    }
+    if (!textEvent) continue;
+    const decoded = await decryptPayload(keyring, textEvent.payload);
+    const text = (decoded as { text?: string }).text;
+    if (text) lines.push(`${msg.role}: ${text}`);
   }
 
   return lines.length ? lines.join("\n") : null;
+}
+
+export async function fetchProfileKeys(
+  supabase: SupabaseClient,
+  profileId: string
+): Promise<ProfileKeys> {
+  const [profileResult, encryptionResult] = await Promise.all([
+    supabase
+      .from("profiles")
+      .select("id, public_key")
+      .eq("id", profileId)
+      .single(),
+    supabase
+      .from("encryption_keys")
+      .select("passphrase_blob, recovery_blob")
+      .eq("profile_id", profileId)
+      .maybeSingle(),
+  ]);
+
+  if (profileResult.error) {
+    throw new Error(`Failed to fetch profile keys: ${profileResult.error.message}`);
+  }
+  if (encryptionResult.error) {
+    throw new Error(`Failed to fetch encryption keys: ${encryptionResult.error.message}`);
+  }
+
+  return {
+    id: profileResult.data.id,
+    public_key: profileResult.data.public_key,
+    passphrase_blob: encryptionResult.data?.passphrase_blob ?? null,
+    recovery_blob: encryptionResult.data?.recovery_blob ?? null,
+  };
+}
+
+export async function createProfileKeys(
+  supabase: SupabaseClient,
+  profileId: string,
+  fields: Omit<ProfileKeys, "id">
+): Promise<void> {
+  const { data, error } = await supabase
+    .from("profiles")
+    .update({ public_key: fields.public_key })
+    .eq("id", profileId)
+    .is("public_key", null)
+    .select("id")
+    .maybeSingle();
+  if (error) throw new Error(`Failed to update profile keys: ${error.message}`);
+  if (!data) {
+    // Keep the DB helper's failure mode explicit for callers that pre-check
+    // and treat "already exists" as a control-flow branch.
+    throw new Error("Failed to update profile keys: identity_already_exists");
+  }
+
+  const { error: encryptionError } = await supabase
+    .from("encryption_keys")
+    .insert({
+      profile_id: profileId,
+      passphrase_blob: fields.passphrase_blob,
+      recovery_blob: fields.recovery_blob,
+    });
+  if (encryptionError) {
+    throw new Error(`Failed to create encryption keys: ${encryptionError.message}`);
+  }
+}
+
+export async function updatePassphraseBlob(
+  supabase: SupabaseClient,
+  profileId: string,
+  passphraseBlob: string
+): Promise<void> {
+  const { error } = await supabase
+    .from("encryption_keys")
+    .update({ passphrase_blob: passphraseBlob })
+    .eq("profile_id", profileId);
+  if (error) {
+    throw new Error(`Failed to update encryption keys: ${error.message}`);
+  }
+}
+
+export async function fetchWrappedKey(
+  supabase: SupabaseClient,
+  spaceId: string,
+  profileId: string
+): Promise<string | null> {
+  const { data, error } = await supabase
+    .from("space_members")
+    .select("wrapped_key")
+    .eq("space_id", spaceId)
+    .eq("profile_id", profileId)
+    .maybeSingle();
+  if (error) throw new Error(`Failed to fetch wrapped_key: ${error.message}`);
+  return data?.wrapped_key ?? null;
+}
+
+export async function updateWrappedKey(
+  supabase: SupabaseClient,
+  spaceId: string,
+  profileId: string,
+  wrappedKey: string
+): Promise<void> {
+  const { error } = await supabase
+    .from("space_members")
+    .update({ wrapped_key: wrappedKey })
+    .eq("space_id", spaceId)
+    .eq("profile_id", profileId);
+  if (error) throw new Error(`Failed to update wrapped_key: ${error.message}`);
 }

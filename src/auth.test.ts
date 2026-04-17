@@ -28,8 +28,12 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import {
   authenticate,
   ensureProfile,
-  ensureAgentAndSpace,
+  findExistingAgent,
+  promptAgentName,
+  createAgent,
+  findSpaceForAgent,
   type Profile,
+  type Agent,
 } from "./auth.js";
 
 function mockPromptResponse(answer: string) {
@@ -221,128 +225,36 @@ describe("auth", () => {
     });
   });
 
-  describe("ensureAgentAndSpace", () => {
+  describe("findExistingAgent", () => {
     const profile: Profile = {
       id: "user-1",
       username: "casey",
       email: "test@example.com",
     };
 
-    function setupMockFrom(supabase: any, responses: Record<string, any>) {
-      supabase.from.mockImplementation((table: string) => {
-        if (responses[table]) return responses[table];
-        return { select: vi.fn(() => ({ eq: vi.fn() })) };
-      });
-    }
-
-    it("returns existing agent and space", async () => {
-      const agent = { id: "agent-1", name: "casey's agent", owner_id: "user-1" };
-      const space = { id: "space-1", agent_id: "agent-1" };
-
+    it("returns the first agent when one exists", async () => {
+      const agent = { id: "agent-1", name: "enc:abcd", owner_id: "user-1" };
       const supabase = createMockSupabase();
-      let fromCallCount = 0;
-      supabase.from.mockImplementation(() => {
-        fromCallCount++;
-        if (fromCallCount === 1) {
-          return {
-            select: vi.fn(() => ({
-              eq: vi.fn().mockResolvedValue({ data: [agent], error: null }),
-            })),
-          };
-        }
-        return {
-          select: vi.fn(() => ({
-            eq: vi.fn().mockResolvedValue({ data: [space], error: null }),
-          })),
-        };
+      supabase.from.mockReturnValue({
+        select: vi.fn(() => ({
+          eq: vi.fn().mockResolvedValue({ data: [agent], error: null }),
+        })),
       });
 
-      const result = await ensureAgentAndSpace(supabase, profile);
-
-      expect(result.agent).toEqual(agent);
-      expect(result.space).toEqual(space);
+      const result = await findExistingAgent(supabase, profile);
+      expect(result).toEqual(agent);
     });
 
-    it("creates agent when none exists, prompting for name", async () => {
-      const newAgent = { id: "agent-new", name: "my bot", owner_id: "user-1" };
-      const space = { id: "space-1", agent_id: "agent-new" };
-
-      mockPromptResponse("my bot");
-
-      const mockInsertSingle = vi.fn().mockResolvedValue({
-        data: newAgent,
-        error: null,
-      });
-      const mockInsertSelect = vi.fn(() => ({ single: mockInsertSingle }));
-
+    it("returns null when no agents exist", async () => {
       const supabase = createMockSupabase();
-      let fromCallCount = 0;
-      supabase.from.mockImplementation(() => {
-        fromCallCount++;
-        if (fromCallCount === 1) {
-          return {
-            select: vi.fn(() => ({
-              eq: vi.fn().mockResolvedValue({ data: [], error: null }),
-            })),
-          };
-        }
-        if (fromCallCount === 2) {
-          return {
-            insert: vi.fn(() => ({ select: mockInsertSelect })),
-          };
-        }
-        return {
-          select: vi.fn(() => ({
-            eq: vi.fn().mockResolvedValue({ data: [space], error: null }),
-          })),
-        };
+      supabase.from.mockReturnValue({
+        select: vi.fn(() => ({
+          eq: vi.fn().mockResolvedValue({ data: [], error: null }),
+        })),
       });
 
-      const result = await ensureAgentAndSpace(supabase, profile);
-
-      expect(result.agent).toEqual(newAgent);
-    });
-
-    it("creates space via RPC when none exists", async () => {
-      const agent = { id: "agent-1", name: "casey's agent", owner_id: "user-1" };
-      const newSpace = { id: "space-new", agent_id: "agent-1" };
-
-      const supabase = createMockSupabase();
-      supabase.rpc.mockResolvedValue({ data: "space-new", error: null });
-
-      let fromCallCount = 0;
-      supabase.from.mockImplementation(() => {
-        fromCallCount++;
-        if (fromCallCount === 1) {
-          return {
-            select: vi.fn(() => ({
-              eq: vi.fn().mockResolvedValue({ data: [agent], error: null }),
-            })),
-          };
-        }
-        if (fromCallCount === 2) {
-          return {
-            select: vi.fn(() => ({
-              eq: vi.fn().mockResolvedValue({ data: [], error: null }),
-            })),
-          };
-        }
-        // fetch new space after RPC
-        return {
-          select: vi.fn(() => ({
-            eq: vi.fn(() => ({
-              single: vi.fn().mockResolvedValue({ data: newSpace, error: null }),
-            })),
-          })),
-        };
-      });
-
-      const result = await ensureAgentAndSpace(supabase, profile);
-
-      expect(supabase.rpc).toHaveBeenCalledWith("create_space", {
-        p_agent_id: "agent-1",
-      });
-      expect(result.space).toEqual(newSpace);
+      const result = await findExistingAgent(supabase, profile);
+      expect(result).toBeNull();
     });
 
     it("throws when agent fetch fails", async () => {
@@ -356,45 +268,82 @@ describe("auth", () => {
         })),
       });
 
-      await expect(ensureAgentAndSpace(supabase, profile)).rejects.toThrow(
+      await expect(findExistingAgent(supabase, profile)).rejects.toThrow(
         "Failed to fetch agents: DB error"
       );
     });
+  });
 
-    it("throws when space creation RPC fails", async () => {
-      const agent = { id: "agent-1", name: "casey's agent", owner_id: "user-1" };
-
-      const supabase = createMockSupabase();
-      supabase.rpc.mockResolvedValue({
-        data: null,
-        error: { message: "Not the agent owner" },
-      });
-
-      let fromCallCount = 0;
-      supabase.from.mockImplementation(() => {
-        fromCallCount++;
-        if (fromCallCount === 1) {
-          return {
-            select: vi.fn(() => ({
-              eq: vi.fn().mockResolvedValue({ data: [agent], error: null }),
-            })),
-          };
-        }
-        return {
-          select: vi.fn(() => ({
-            eq: vi.fn().mockResolvedValue({ data: [], error: null }),
-          })),
-        };
-      });
-
-      await expect(ensureAgentAndSpace(supabase, profile)).rejects.toThrow(
-        "Failed to create space: Not the agent owner"
-      );
+  describe("promptAgentName", () => {
+    it("returns the entered name", async () => {
+      mockPromptResponse("my bot");
+      const name = await promptAgentName();
+      expect(name).toBe("my bot");
     });
 
-    it("throws when agent name is empty", async () => {
+    it("throws when the entered name is empty", async () => {
       mockPromptResponse("");
+      await expect(promptAgentName()).rejects.toThrow("Agent name is required");
+    });
+  });
 
+  describe("createAgent", () => {
+    const profile: Profile = {
+      id: "user-1",
+      username: "casey",
+      email: "test@example.com",
+    };
+
+    it("inserts the row with the supplied (encrypted) name and returns the agent", async () => {
+      const newAgent = { id: "agent-new", name: "enc:cipher", owner_id: "user-1" };
+      const mockInsertSingle = vi.fn().mockResolvedValue({ data: newAgent, error: null });
+      const mockInsertSelect = vi.fn(() => ({ single: mockInsertSingle }));
+      const mockInsert = vi.fn(() => ({ select: mockInsertSelect }));
+      const supabase = createMockSupabase();
+      supabase.from.mockReturnValue({ insert: mockInsert });
+
+      const agent = await createAgent(supabase, profile, "enc:cipher");
+
+      expect(mockInsert).toHaveBeenCalledWith({
+        owner_id: "user-1",
+        name: "enc:cipher",
+        model: "unknown",
+      });
+      expect(agent).toEqual(newAgent);
+    });
+
+    it("throws when the insert fails", async () => {
+      const mockInsertSingle = vi.fn().mockResolvedValue({
+        data: null,
+        error: { message: "DB error" },
+      });
+      const mockInsertSelect = vi.fn(() => ({ single: mockInsertSingle }));
+      const supabase = createMockSupabase();
+      supabase.from.mockReturnValue({ insert: vi.fn(() => ({ select: mockInsertSelect })) });
+
+      await expect(createAgent(supabase, profile, "enc:cipher")).rejects.toThrow(
+        "Failed to create agent: DB error"
+      );
+    });
+  });
+
+  describe("findSpaceForAgent", () => {
+    const agent: Agent = { id: "agent-1", name: "enc:xyz", owner_id: "user-1" };
+
+    it("returns the existing space when present", async () => {
+      const space = { id: "space-1", agent_id: "agent-1" };
+      const supabase = createMockSupabase();
+      supabase.from.mockReturnValue({
+        select: vi.fn(() => ({
+          eq: vi.fn().mockResolvedValue({ data: [space], error: null }),
+        })),
+      });
+
+      const result = await findSpaceForAgent(supabase, agent);
+      expect(result).toEqual(space);
+    });
+
+    it("returns null when the agent has no space yet", async () => {
       const supabase = createMockSupabase();
       supabase.from.mockReturnValue({
         select: vi.fn(() => ({
@@ -402,8 +351,20 @@ describe("auth", () => {
         })),
       });
 
-      await expect(ensureAgentAndSpace(supabase, profile)).rejects.toThrow(
-        "Agent name is required"
+      const result = await findSpaceForAgent(supabase, agent);
+      expect(result).toBeNull();
+    });
+
+    it("throws on DB error", async () => {
+      const supabase = createMockSupabase();
+      supabase.from.mockReturnValue({
+        select: vi.fn(() => ({
+          eq: vi.fn().mockResolvedValue({ data: null, error: { message: "DB error" } }),
+        })),
+      });
+
+      await expect(findSpaceForAgent(supabase, agent)).rejects.toThrow(
+        "Failed to fetch spaces: DB error"
       );
     });
   });

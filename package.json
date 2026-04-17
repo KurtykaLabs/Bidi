@@ -16,9 +16,11 @@
     "@anthropic-ai/claude-agent-sdk": "^0.2.62",
     "@supabase/supabase-js": "^2.98.0",
     "dotenv": "^17.3.1",
+    "libsodium-wrappers-sumo": "^0.7.16",
     "posthog-node": "^5.28.11"
   },
   "devDependencies": {
+    "@types/libsodium-wrappers-sumo": "^0.7.8",
     "@types/node": "^22.0.0",
     "tsx": "^4.0.0",
     "typescript": "^5.0.0",

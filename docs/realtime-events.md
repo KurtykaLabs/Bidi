@@ -8,16 +8,22 @@ Conversations are organized into channels. Each channel has its own Supabase Rea
 
 ### Subscribing to agent events (broadcast)
 
+Broadcast payloads are end-to-end encrypted with the space key (whitepaper §9.5). Each broadcast carries a single field, `data`, which is the unified encrypted blob (`base64(version || nonce || ciphertext)`) of the underlying event object. Decrypt with `crypto_secretbox_open` using the cached space key to recover `{ type, message_id, ...fields }`.
+
 ```typescript
 const channel = supabase.channel(`channel:${channelId}`);
 
 channel
-  .on("broadcast", { event: "agent_event" }, ({ payload }) => {
-    // payload.type determines the shape — see Event Types below
-    // payload.message_id links to the parent message
+  .on("broadcast", { event: "agent_event" }, async ({ payload }) => {
+    // payload.data is the encrypted envelope; decrypt with the space key.
+    const event = await decryptJsonPayload(spaceKey, payload.data);
+    // event.type determines the shape — see Event Types below
+    // event.message_id links to the parent message
   })
   .subscribe();
 ```
+
+The same envelope shape (`{ data: <base64> }`) is used for `channel_event` broadcasts.
 
 ### Subscribing to new messages (postgres_changes)
 
@@ -120,11 +126,12 @@ Every broadcast payload has the shape `{ type: string, message_id: string, ...fi
 
 ### Channel events
 
-Channel-level events are broadcast on the same `channel:{channelId}` channel using event name `"channel_event"`.
+Channel-level events are broadcast on the same `channel:{channelId}` channel using event name `"channel_event"`. They follow the same encrypted envelope as `agent_event` broadcasts.
 
 ```typescript
-channel.on("broadcast", { event: "channel_event" }, ({ payload }) => {
-  // payload.type determines the event
+channel.on("broadcast", { event: "channel_event" }, async ({ payload }) => {
+  const event = await decryptJsonPayload(spaceKey, payload.data);
+  // event.type determines the event
 });
 ```
 
@@ -210,30 +217,34 @@ channels → messages → events (persisted milestones)
 
 ## Broadcast Payload Shape
 
-All broadcasts use event name `"agent_event"` on the `channel:{channelId}` channel:
+All broadcasts on `channel:{channelId}` use the same outer envelope. The Supabase `payload` field carries a single key `data` whose value is the encrypted event (whitepaper §9.5):
+
+```jsonc
+{
+  "type": "broadcast",
+  "event": "agent_event",
+  "payload": {
+    "data": "AbcD...="   // base64(version || nonce || ciphertext)
+  }
+}
+```
+
+Decrypting `payload.data` with the space key yields the original event object:
 
 ```jsonc
 // Non-persisted event (no event_id)
 {
-  "type": "broadcast",
-  "event": "agent_event",
-  "payload": {
-    "type": "text_delta",
-    "text": "Hello",
-    "message_id": "msg-uuid"
-  }
+  "type": "text_delta",
+  "text": "Hello",
+  "message_id": "msg-uuid"
 }
 
 // Persisted milestone event (includes event_id)
 {
-  "type": "broadcast",
-  "event": "agent_event",
-  "payload": {
-    "type": "assistant_message",
-    "text": "Hello world",
-    "message_id": "msg-uuid",
-    "event_id": "evt-uuid"
-  }
+  "type": "assistant_message",
+  "text": "Hello world",
+  "message_id": "msg-uuid",
+  "event_id": "evt-uuid"
 }
 ```
 

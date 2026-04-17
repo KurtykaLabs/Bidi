@@ -36,6 +36,8 @@ vi.mock("./db.js", () => ({
 }));
 
 import { RealtimeListener } from "./realtime.js";
+import { Keyring } from "./keyring.js";
+import { decryptJsonPayload, ensureSodium } from "./crypto.js";
 
 const mockSupabase = {
   channel: mockChannelFactory,
@@ -43,13 +45,25 @@ const mockSupabase = {
   realtime: { disconnect: mockDisconnect, connect: mockConnect },
 } as any;
 
+const TEST_SPACE_KEY = new Uint8Array(32).fill(7);
+
+async function decryptCapturedPayload(call: any): Promise<Record<string, unknown>> {
+  const sent = call[0] as { payload: { data: string } };
+  return decryptJsonPayload(TEST_SPACE_KEY, sent.payload.data);
+}
+
 describe("RealtimeListener", () => {
   let listener: RealtimeListener;
+  let keyring: Keyring;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     subscribeCallback = undefined;
-    listener = new RealtimeListener(mockSupabase);
+    process.env.NODE_ENV = "test";
+    await ensureSodium();
+    keyring = new Keyring();
+    keyring.setForTesting({ spaceId: "space-1", spaceKey: TEST_SPACE_KEY });
+    listener = new RealtimeListener(mockSupabase, keyring);
   });
 
   afterEach(() => {
@@ -121,25 +135,36 @@ describe("RealtimeListener", () => {
   });
 
   describe("broadcastAgentEvent", () => {
-    it("lazy-creates a broadcast channel on first call", async () => {
+    async function flushBroadcast() {
+      // sendEncrypted awaits broadcastReady then encrypts; let the microtask
+      // queue + libsodium drain.
+      await new Promise((r) => setImmediate(r));
+      await new Promise((r) => setImmediate(r));
+    }
+
+    it("lazy-creates a broadcast channel on first call and sends an encrypted envelope", async () => {
       listener.broadcastAgentEvent("ch-1", { type: "text_delta", text: "Hi" }, "msg-1");
-      await Promise.resolve();
+      await flushBroadcast();
 
       expect(mockChannelFactory).toHaveBeenCalledWith("channel:ch-1");
       expect(mockSubscribe).toHaveBeenCalled();
-      expect(mockSend).toHaveBeenCalledWith({
-        type: "broadcast",
-        event: "agent_event",
-        payload: { type: "text_delta", text: "Hi", message_id: "msg-1" },
-      });
+      expect(mockSend).toHaveBeenCalledTimes(1);
+      const sent = mockSend.mock.calls[0][0] as { type: string; event: string; payload: { data: string } };
+      expect(sent.type).toBe("broadcast");
+      expect(sent.event).toBe("agent_event");
+      expect(typeof sent.payload.data).toBe("string");
+      // Plaintext must not appear anywhere in the wire payload.
+      expect(JSON.stringify(sent)).not.toContain("Hi");
+      // Decrypts back to the original event shape.
+      const decoded = await decryptJsonPayload(TEST_SPACE_KEY, sent.payload.data);
+      expect(decoded).toEqual({ type: "text_delta", text: "Hi", message_id: "msg-1" });
     });
 
     it("reuses existing broadcast channel on subsequent calls", async () => {
       listener.broadcastAgentEvent("ch-1", { type: "text_delta", text: "Hi" }, "msg-1");
       listener.broadcastAgentEvent("ch-1", { type: "text_delta", text: "there" }, "msg-1");
-      await Promise.resolve();
+      await flushBroadcast();
 
-      // channel factory called once for "messages:all" in constructor + once for "channel:ch-1"
       const channelCalls = mockChannelFactory.mock.calls.filter(
         (c: any) => c[0] === "channel:ch-1"
       );
@@ -147,62 +172,78 @@ describe("RealtimeListener", () => {
       expect(mockSend).toHaveBeenCalledTimes(2);
     });
 
-    it("creates separate channels for different channelIds", () => {
+    it("creates separate channels for different channelIds", async () => {
       listener.broadcastAgentEvent("ch-1", { type: "text_delta", text: "a" }, "msg-1");
       listener.broadcastAgentEvent("ch-2", { type: "text_delta", text: "b" }, "msg-2");
+      await flushBroadcast();
 
       expect(mockChannelFactory).toHaveBeenCalledWith("channel:ch-1");
       expect(mockChannelFactory).toHaveBeenCalledWith("channel:ch-2");
     });
 
-    it("includes event_id in payload when provided", async () => {
+    it("includes event_id in encrypted payload when provided", async () => {
       listener.broadcastAgentEvent("ch-1", { type: "text_delta", text: "Hi" }, "msg-1", "evt-1");
-      await Promise.resolve();
+      await flushBroadcast();
 
-      expect(mockSend).toHaveBeenCalledWith({
-        type: "broadcast",
-        event: "agent_event",
-        payload: { type: "text_delta", text: "Hi", message_id: "msg-1", event_id: "evt-1" },
+      const decoded = await decryptCapturedPayload(mockSend.mock.calls[0]);
+      expect(decoded).toEqual({
+        type: "text_delta",
+        text: "Hi",
+        message_id: "msg-1",
+        event_id: "evt-1",
       });
     });
 
-    it("spreads all event fields into payload", async () => {
+    it("spreads all event fields into the encrypted payload", async () => {
       listener.broadcastAgentEvent(
         "ch-1",
         { type: "tool_use_start", name: "read_file", id: "tool-1" },
         "msg-1"
       );
-      await Promise.resolve();
+      await flushBroadcast();
 
-      expect(mockSend).toHaveBeenCalledWith({
-        type: "broadcast",
-        event: "agent_event",
-        payload: {
-          type: "tool_use_start",
-          name: "read_file",
-          id: "tool-1",
-          message_id: "msg-1",
-        },
+      const decoded = await decryptCapturedPayload(mockSend.mock.calls[0]);
+      expect(decoded).toEqual({
+        type: "tool_use_start",
+        name: "read_file",
+        id: "tool-1",
+        message_id: "msg-1",
       });
+    });
+
+    it("produces unique ciphertexts for repeated identical events (random nonces)", async () => {
+      listener.broadcastAgentEvent("ch-1", { type: "text_delta", text: "Hi" }, "msg-1");
+      listener.broadcastAgentEvent("ch-1", { type: "text_delta", text: "Hi" }, "msg-1");
+      await flushBroadcast();
+
+      const a = (mockSend.mock.calls[0][0] as any).payload.data;
+      const b = (mockSend.mock.calls[1][0] as any).payload.data;
+      expect(a).not.toBe(b);
     });
   });
 
   describe("broadcastChannelEvent", () => {
-    it("sends channel_event with correct payload shape", async () => {
-      listener.broadcastChannelEvent("ch-1", "channel_renamed", { name: "test_channel" });
-      await Promise.resolve();
+    async function flushBroadcast() {
+      await new Promise((r) => setImmediate(r));
+      await new Promise((r) => setImmediate(r));
+    }
 
-      expect(mockSend).toHaveBeenCalledWith({
-        type: "broadcast",
-        event: "channel_event",
-        payload: { type: "channel_renamed", name: "test_channel" },
-      });
+    it("sends channel_event with an encrypted envelope and never leaks the channel name", async () => {
+      listener.broadcastChannelEvent("ch-1", "channel_renamed", { name: "test_channel" });
+      await flushBroadcast();
+
+      const sent = mockSend.mock.calls[0][0] as { type: string; event: string; payload: { data: string } };
+      expect(sent.type).toBe("broadcast");
+      expect(sent.event).toBe("channel_event");
+      expect(JSON.stringify(sent)).not.toContain("test_channel");
+      const decoded = await decryptJsonPayload(TEST_SPACE_KEY, sent.payload.data);
+      expect(decoded).toEqual({ type: "channel_renamed", name: "test_channel" });
     });
 
     it("reuses existing broadcast channel", async () => {
       listener.broadcastAgentEvent("ch-1", { type: "text_delta", text: "Hi" }, "msg-1");
       listener.broadcastChannelEvent("ch-1", "channel_renamed", { name: "test_channel" });
-      await Promise.resolve();
+      await flushBroadcast();
 
       const channelCalls = mockChannelFactory.mock.calls.filter(
         (c: any) => c[0] === "channel:ch-1"
@@ -462,7 +503,7 @@ describe("RealtimeListener", () => {
       });
 
       const localSupabase = { channel: localFactory, removeChannel: localRemove } as any;
-      const freshListener = new RealtimeListener(localSupabase);
+      const freshListener = new RealtimeListener(localSupabase, keyring);
       const onMessage = vi.fn();
       freshListener.subscribe(onMessage);
 

@@ -2,6 +2,8 @@ import type { SupabaseClient, RealtimeChannel } from "@supabase/supabase-js";
 import type { AgentEvent } from "./agent.js";
 import { getHumanMessagesSince } from "./db.js";
 import { trackEvent, captureError } from "./analytics.js";
+import { encryptJsonPayload } from "./crypto.js";
+import type { Keyring } from "./keyring.js";
 
 export interface MessageRow {
   id: string;
@@ -13,6 +15,7 @@ export interface MessageRow {
 
 export class RealtimeListener {
   private supabase: SupabaseClient;
+  private keyring: Keyring;
   private listenerChannel: RealtimeChannel;
   private broadcastChannels = new Map<string, RealtimeChannel>();
   private broadcastReady = new Map<string, Promise<void>>();
@@ -55,8 +58,9 @@ export class RealtimeListener {
     }
   }
 
-  constructor(supabase: SupabaseClient) {
+  constructor(supabase: SupabaseClient, keyring: Keyring) {
     this.supabase = supabase;
+    this.keyring = keyring;
     this.listenerChannel = this.supabase.channel("messages:all");
   }
 
@@ -154,25 +158,38 @@ export class RealtimeListener {
     return channel;
   }
 
-  broadcastChannelEvent(channelId: string, event: string, payload: Record<string, unknown>): void {
+  // Whitepaper §9.5: broadcasts ride the same encryption envelope as persisted
+  // content. The Supabase broadcast `payload` field carries `{ data: <base64> }`
+  // where `data` is the unified encrypted blob (`base64(version||nonce||ct)`)
+  // wrapping the plaintext event object. Receivers decrypt with the space key
+  // and recover the original `{ type, ...fields }` shape.
+  private async sendEncrypted(
+    channelId: string,
+    eventName: "agent_event" | "channel_event",
+    plaintext: Record<string, unknown>,
+  ): Promise<void> {
     const ch = this.ensureBroadcastChannel(channelId);
-    this.broadcastReady.get(channelId)!.then(() => {
-      ch.send({
-        type: "broadcast",
-        event: "channel_event",
-        payload: { type: event, ...payload },
-      });
+    await this.broadcastReady.get(channelId)!;
+    const data = await encryptJsonPayload(this.keyring.getSpaceKey(), plaintext);
+    ch.send({
+      type: "broadcast",
+      event: eventName,
+      payload: { data },
+    });
+  }
+
+  broadcastChannelEvent(channelId: string, event: string, payload: Record<string, unknown>): void {
+    void this.sendEncrypted(channelId, "channel_event", { type: event, ...payload }).catch((err) => {
+      captureError(err, { context: "broadcast_channel_event", channelId });
+      this.logError(`broadcastChannelEvent failed: ${this.formatError(err)}`);
     });
   }
 
   broadcastAgentEvent(channelId: string, event: AgentEvent, messageId: string, eventId?: string): void {
-    const ch = this.ensureBroadcastChannel(channelId);
-    this.broadcastReady.get(channelId)!.then(() => {
-      ch.send({
-        type: "broadcast",
-        event: "agent_event",
-        payload: { ...event, message_id: messageId, ...(eventId && { event_id: eventId }) },
-      });
+    const plaintext = { ...event, message_id: messageId, ...(eventId && { event_id: eventId }) };
+    void this.sendEncrypted(channelId, "agent_event", plaintext).catch((err) => {
+      captureError(err, { context: "broadcast_agent_event", channelId });
+      this.logError(`broadcastAgentEvent failed: ${this.formatError(err)}`);
     });
   }
 

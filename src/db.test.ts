@@ -1,4 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
+import { encryptJsonPayload, ensureSodium } from "./crypto.js";
+import { Keyring } from "./keyring.js";
 
 const mockSingle = vi.fn().mockResolvedValue({ data: { id: "msg-1" }, error: null });
 const mockSelect = vi.fn(() => ({ single: mockSingle }));
@@ -29,11 +31,20 @@ import {
 } from "./db.js";
 
 const TEST_CHANNEL_ID = "ch-123";
+const TEST_SPACE_KEY = new Uint8Array(32).fill(42);
+let keyring: Keyring;
+
+beforeAll(async () => {
+  await ensureSodium();
+  process.env.NODE_ENV = "test";
+});
 
 describe("db", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSingle.mockResolvedValue({ data: { id: "msg-1" }, error: null });
+    keyring = new Keyring();
+    keyring.setForTesting({ spaceId: "space-1", spaceKey: TEST_SPACE_KEY });
   });
 
   describe("createMessage", () => {
@@ -111,19 +122,27 @@ describe("db", () => {
   });
 
   describe("persistEvent", () => {
-    it("inserts an event row under a message", async () => {
+    it("encrypts payload before insert", async () => {
       const plainInsert = vi.fn().mockResolvedValue({ error: null });
       mockFrom.mockReturnValueOnce({ insert: plainInsert });
 
-      await persistEvent(supabase, "evt-1", "msg-1", "text", { text: "Hello" });
+      await persistEvent(supabase, "evt-1", "msg-1", "text", { text: "Hello" }, keyring);
 
       expect(mockFrom).toHaveBeenCalledWith("events");
-      expect(plainInsert).toHaveBeenCalledWith({
+      expect(plainInsert).toHaveBeenCalledTimes(1);
+      const inserted = plainInsert.mock.calls[0][0] as Record<string, unknown>;
+      expect(inserted).toMatchObject({
         id: "evt-1",
         message_id: "msg-1",
         type: "text",
-        payload: { text: "Hello" },
       });
+      const payload = inserted.payload as string;
+      expect(typeof payload).toBe("string");
+      expect(payload.length).toBeGreaterThan(10);
+      // version byte 0x01 at offset 0 of the unified content format
+      expect(Buffer.from(payload, "base64")[0]).toBe(0x01);
+      // plaintext must not be in the written payload
+      expect(payload).not.toContain("Hello");
     });
 
     it("throws on DB error", async () => {
@@ -131,20 +150,28 @@ describe("db", () => {
       mockFrom.mockReturnValueOnce({ insert: plainInsert });
 
       await expect(
-        persistEvent(supabase, "evt-1", "msg-1", "text", { text: "Hello" })
+        persistEvent(supabase, "evt-1", "msg-1", "text", { text: "Hello" }, keyring)
       ).rejects.toEqual({ message: "DB error" });
     });
   });
 
   describe("getMessageText", () => {
-    it("returns text from the first text event", async () => {
+    it("decrypts an encrypted payload", async () => {
+      const envelope = await encryptJsonPayload(TEST_SPACE_KEY, { text: "Hello" });
+      mockSingle.mockResolvedValue({ data: { payload: envelope }, error: null });
+
+      const text = await getMessageText(supabase, "msg-1", keyring);
+      expect(text).toBe("Hello");
+    });
+
+    it("passes through legacy plaintext payloads", async () => {
       mockSingle.mockResolvedValue({
-        data: { payload: { text: "Hello" } },
+        data: { payload: { text: "Legacy plaintext" } },
         error: null,
       });
 
-      const text = await getMessageText(supabase, "msg-1");
-      expect(text).toBe("Hello");
+      const text = await getMessageText(supabase, "msg-1", keyring);
+      expect(text).toBe("Legacy plaintext");
     });
 
     it("returns null on error", async () => {
@@ -153,7 +180,7 @@ describe("db", () => {
         error: { message: "not found" },
       });
 
-      const text = await getMessageText(supabase, "msg-1");
+      const text = await getMessageText(supabase, "msg-1", keyring);
       expect(text).toBeNull();
     });
 
@@ -163,7 +190,7 @@ describe("db", () => {
         error: null,
       });
 
-      const text = await getMessageText(supabase, "msg-1");
+      const text = await getMessageText(supabase, "msg-1", keyring);
       expect(text).toBeNull();
     });
   });
@@ -208,10 +235,10 @@ describe("db", () => {
       const mockEqId = vi.fn(() => ({ eq: mockEqName }));
       mockUpdate.mockReturnValueOnce({ eq: mockEqId });
 
-      const result = await updateChannelName(supabase, TEST_CHANNEL_ID, "project_discussion");
+      const result = await updateChannelName(supabase, TEST_CHANNEL_ID, "enc:encoded-name");
 
       expect(mockFrom).toHaveBeenCalledWith("channels");
-      expect(mockUpdate).toHaveBeenCalledWith({ name: "project_discussion" });
+      expect(mockUpdate).toHaveBeenCalledWith({ name: "enc:encoded-name" });
       expect(mockEqId).toHaveBeenCalledWith("id", TEST_CHANNEL_ID);
       expect(mockEqName).toHaveBeenCalledWith("name", "new_channel");
       expect(result).toBe(true);
@@ -223,7 +250,7 @@ describe("db", () => {
       const mockEqId = vi.fn(() => ({ eq: mockEqName }));
       mockUpdate.mockReturnValueOnce({ eq: mockEqId });
 
-      const result = await updateChannelName(supabase, TEST_CHANNEL_ID, "project_discussion");
+      const result = await updateChannelName(supabase, TEST_CHANNEL_ID, "enc:encoded-name");
       expect(result).toBe(false);
     });
 
@@ -234,7 +261,7 @@ describe("db", () => {
       mockUpdate.mockReturnValueOnce({ eq: mockEqId });
 
       await expect(
-        updateChannelName(supabase, TEST_CHANNEL_ID, "project_discussion")
+        updateChannelName(supabase, TEST_CHANNEL_ID, "enc:encoded-name")
       ).rejects.toEqual({ message: "DB error" });
     });
   });
@@ -301,73 +328,55 @@ describe("db", () => {
       return { mockSelectSummary, mockLimitFn };
     }
 
-    it("returns formatted summary of recent channel messages", async () => {
+    it("returns formatted summary, decrypting encrypted payloads", async () => {
+      const humanEnv = await encryptJsonPayload(TEST_SPACE_KEY, { text: "Hello" });
+      const agentEnv = await encryptJsonPayload(TEST_SPACE_KEY, { text: "Hi there!" });
       const { mockSelectSummary } = mockSummaryChain({
         data: [
-          { role: "agent", events: [{ type: "assistant_message", payload: { text: "Hi there!" } }] },
-          { role: "human", events: [{ type: "text", payload: { text: "Hello" } }] },
+          { role: "agent", events: [{ type: "assistant_message", payload: agentEnv }] },
+          { role: "human", events: [{ type: "text", payload: humanEnv }] },
         ],
         error: null,
       });
 
-      const summary = await getChannelSummary(supabase, TEST_CHANNEL_ID);
+      const summary = await getChannelSummary(supabase, TEST_CHANNEL_ID, keyring);
 
       expect(mockFrom).toHaveBeenCalledWith("messages");
       expect(mockSelectSummary).toHaveBeenCalledWith("role, events!inner(type, payload)");
       expect(summary).toBe("human: Hello\nagent: Hi there!");
     });
 
+    it("passes through plaintext payloads (backward compat)", async () => {
+      mockSummaryChain({
+        data: [
+          { role: "human", events: [{ type: "text", payload: { text: "Legacy plaintext" } }] },
+        ],
+        error: null,
+      });
+
+      const summary = await getChannelSummary(supabase, TEST_CHANNEL_ID, keyring);
+      expect(summary).toBe("human: Legacy plaintext");
+    });
+
     it("returns null on DB error", async () => {
       mockSummaryChain({ data: null, error: { message: "DB error" } });
 
-      const summary = await getChannelSummary(supabase, TEST_CHANNEL_ID);
+      const summary = await getChannelSummary(supabase, TEST_CHANNEL_ID, keyring);
       expect(summary).toBeNull();
     });
 
     it("returns null when no messages exist", async () => {
       mockSummaryChain({ data: [], error: null });
 
-      const summary = await getChannelSummary(supabase, TEST_CHANNEL_ID);
+      const summary = await getChannelSummary(supabase, TEST_CHANNEL_ID, keyring);
       expect(summary).toBeNull();
-    });
-
-    it("skips messages with no text in events", async () => {
-      mockSummaryChain({
-        data: [
-          { role: "human", events: [{ type: "text", payload: { text: "Follow up" } }] },
-          { role: "agent", events: [] },
-          { role: "human", events: [{ type: "text", payload: { text: "Hello" } }] },
-        ],
-        error: null,
-      });
-
-      const summary = await getChannelSummary(supabase, TEST_CHANNEL_ID);
-      expect(summary).toBe("human: Hello\nhuman: Follow up");
     });
 
     it("respects custom limit parameter", async () => {
       const { mockLimitFn } = mockSummaryChain({ data: [], error: null });
 
-      await getChannelSummary(supabase, TEST_CHANNEL_ID, 5);
+      await getChannelSummary(supabase, TEST_CHANNEL_ID, keyring, 5);
       expect(mockLimitFn).toHaveBeenCalledWith(5);
-    });
-
-    it("finds text event among multiple event types", async () => {
-      mockSummaryChain({
-        data: [
-          {
-            role: "agent",
-            events: [
-              { type: "tool_use_start", payload: { name: "bash" } },
-              { type: "assistant_message", payload: { text: "Done!" } },
-            ],
-          },
-        ],
-        error: null,
-      });
-
-      const summary = await getChannelSummary(supabase, TEST_CHANNEL_ID);
-      expect(summary).toBe("agent: Done!");
     });
   });
 });

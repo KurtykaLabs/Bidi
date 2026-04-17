@@ -171,59 +171,54 @@ export async function ensureProfile(supabase: SupabaseClient): Promise<Profile> 
   return profile;
 }
 
-export async function ensureAgentAndSpace(
+export async function findExistingAgent(
   supabase: SupabaseClient,
   profile: Profile
-): Promise<{ agent: Agent; space: Space }> {
-  // Check for existing agent
-  const { data: agents, error: agentError } = await supabase
+): Promise<Agent | null> {
+  const { data: agents, error } = await supabase
     .from("agents")
     .select("id, name, owner_id")
     .eq("owner_id", profile.id);
-  if (agentError) throw new Error(`Failed to fetch agents: ${agentError.message}`);
+  if (error) throw new Error(`Failed to fetch agents: ${error.message}`);
+  return agents && agents.length > 0 ? agents[0] : null;
+}
 
-  let agent: Agent;
-  if (agents && agents.length > 0) {
-    agent = agents[0];
-  } else {
-    const agentName = await prompt("Agent name: ");
-    if (!agentName) throw new Error("Agent name is required");
-    const { data: newAgent, error: createError } = await supabase
-      .from("agents")
-      .insert({ owner_id: profile.id, name: agentName, model: "unknown" })
-      .select("id, name, owner_id")
-      .single();
-    if (createError) throw new Error(`Failed to create agent: ${createError.message}`);
-    agent = newAgent;
-    trackEvent("agent_created", { agentName });
-    console.log(`Created agent "${agentName}".`);
-  }
+export async function promptAgentName(): Promise<string> {
+  const agentName = await prompt("Agent name: ");
+  if (!agentName) throw new Error("Agent name is required");
+  return agentName;
+}
 
-  // Check for existing space
-  const { data: spaces, error: spaceError } = await supabase
+/**
+ * Insert a new agent row with a pre-encrypted name. Encryption happens upstream
+ * so the plaintext name never reaches the database — even briefly — and so
+ * Postgres WAL, audit logs, and replicas only ever observe the ciphertext.
+ */
+export async function createAgent(
+  supabase: SupabaseClient,
+  profile: Profile,
+  encryptedName: string,
+): Promise<Agent> {
+  const { data: newAgent, error } = await supabase
+    .from("agents")
+    .insert({ owner_id: profile.id, name: encryptedName, model: "unknown" })
+    .select("id, name, owner_id")
+    .single();
+  if (error) throw new Error(`Failed to create agent: ${error.message}`);
+
+  trackEvent("agent_created", { agentId: newAgent.id });
+  console.log("Agent created.");
+  return newAgent;
+}
+
+export async function findSpaceForAgent(
+  supabase: SupabaseClient,
+  agent: Agent
+): Promise<Space | null> {
+  const { data, error } = await supabase
     .from("spaces")
     .select("id, agent_id")
     .eq("agent_id", agent.id);
-  if (spaceError) throw new Error(`Failed to fetch spaces: ${spaceError.message}`);
-
-  let space: Space;
-  if (spaces && spaces.length > 0) {
-    space = spaces[0];
-  } else {
-    const { data: spaceId, error: createError } = await supabase
-      .rpc("create_space", { p_agent_id: agent.id });
-    if (createError) throw new Error(`Failed to create space: ${createError.message}`);
-
-    const { data: newSpace, error: fetchError } = await supabase
-      .from("spaces")
-      .select("id, agent_id")
-      .eq("id", spaceId)
-      .single();
-    if (fetchError) throw new Error(`Failed to fetch new space: ${fetchError.message}`);
-    space = newSpace;
-    trackEvent("space_created");
-    console.log(`Created space with #general channel.`);
-  }
-
-  return { agent, space };
+  if (error) throw new Error(`Failed to fetch spaces: ${error.message}`);
+  return data && data.length > 0 ? data[0] : null;
 }
